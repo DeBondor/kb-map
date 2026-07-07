@@ -31,7 +31,7 @@ kb-gtfs/
 ## 1. Statyczny GTFS
 
 ```bash
-npm run build:gtfs -- --date 2026-07-05
+npm run build:gtfs -- --date 2026-07-07
 ```
 
 Opcje (po `--`):
