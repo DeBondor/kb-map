@@ -1,0 +1,286 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+
+  /* ---- surfaces (Material-3-like dark neutrals) ---- */
+  --color-bg: #0d1013;
+  --color-surface: #16191d;
+  --color-surface-2: #1f242a;
+  --color-surface-3: #293038;
+  --color-hairline: rgba(255, 255, 255, 0.07);
+
+  /* ---- text ---- */
+  --color-text: #e8eaed;
+  --color-text-mute: #9aa0a6;
+  --color-text-faint: #667079;
+
+  /* ---- brand (Komunikacja Beskidzka) ---- */
+  --color-brand: #a6192e;
+  --color-brand-hi: #c22239;
+  --color-on-brand: #ffffff;
+  /* lightened brand tone — accessible as text/icons on dark surfaces */
+  --color-primary: #ee7583;
+  --color-primary-dim: rgba(238, 117, 131, 0.14);
+
+  /* ---- status ---- */
+  --color-good: #7ee2a8;
+  --color-late: #ffb865;
+  --color-early: #cf9bff;
+  --color-danger: #ff8a80;
+
+  /* soft neutral elevation — no colored glow */
+  --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 28px -6px rgba(0, 0, 0, 0.55);
+  --shadow-sheet: 0 -4px 32px rgba(0, 0, 0, 0.45);
+
+  --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+
+  --animate-pulse-dot: pulse-dot 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  --animate-shimmer: shimmer 1.4s linear infinite;
+  --animate-rise: rise 0.32s var(--ease-spring);
+  --animate-drop: drop 0.28s var(--ease-spring);
+  --animate-fade: fade 0.2s ease-out;
+  --animate-pop: pop 0.3s var(--ease-spring);
+
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(126, 226, 168, 0.45); }
+    50% { opacity: 0.7; box-shadow: 0 0 0 5px rgba(126, 226, 168, 0); }
+  }
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(14px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes drop {
+    from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @keyframes fade {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes pop {
+    from { opacity: 0; transform: scale(0.85); }
+    to { opacity: 1; transform: scale(1); }
+  }
+}
+
+/* ---------- base ---------- */
+
+html, body { height: 100%; }
+
+/* opaque app surface — panels sit on the map, so they stay solid & readable */
+.surface {
+  background: var(--color-surface);
+  border: 1px solid var(--color-hairline);
+  box-shadow: var(--shadow-float);
+}
+
+/* skeleton shimmer */
+.skeleton {
+  border-radius: 8px;
+  background: linear-gradient(100deg, rgba(154, 160, 166, 0.1) 40%, rgba(154, 160, 166, 0.2) 50%, rgba(154, 160, 166, 0.1) 60%);
+  background-size: 200% 100%;
+  animation: var(--animate-shimmer);
+}
+
+/* slim dark scrollbars inside panels */
+.kb-scroll { scrollbar-width: thin; scrollbar-color: rgba(154, 160, 166, 0.3) transparent; }
+.kb-scroll::-webkit-scrollbar { width: 8px; }
+.kb-scroll::-webkit-scrollbar-thumb { background: rgba(154, 160, 166, 0.28); border-radius: 8px; }
+.kb-scroll::-webkit-scrollbar-track { background: transparent; }
+
+/* staggered list entrance (first rows only, subtle) */
+.stagger > * { animation: rise 0.3s var(--ease-spring) backwards; }
+.stagger > *:nth-child(1) { animation-delay: 0.02s; }
+.stagger > *:nth-child(2) { animation-delay: 0.05s; }
+.stagger > *:nth-child(3) { animation-delay: 0.08s; }
+.stagger > *:nth-child(4) { animation-delay: 0.11s; }
+.stagger > *:nth-child(5) { animation-delay: 0.14s; }
+.stagger > *:nth-child(6) { animation-delay: 0.17s; }
+
+/* ---------- vehicle markers (zbiorkom-style pill: arrow + bus + line) ---------- */
+
+.veh-marker { background: none; border: 0; }
+
+.veh-wrap {
+  position: relative; width: 100%; height: 100%;
+  animation: pop 0.28s var(--ease-spring) backwards;
+}
+
+/* one horizontal rounded-full lozenge, pinned to the GPS point */
+.veh-pill {
+  position: absolute; top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex; align-items: center; gap: 2px;
+  height: 22px; padding: 0 7px 0 4px;
+  border-radius: 999px;
+  color: #fff;
+  font-weight: 700; font-size: 12px; line-height: 1;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+  border: 1.5px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 3px 8px -1px rgba(0, 0, 0, 0.5);
+  box-sizing: border-box;
+  transition: transform 0.15s var(--ease-spring);
+  cursor: pointer;
+}
+.veh-pill.no-heading { padding-left: 7px; }
+
+/* left: heading arrow — ONLY this element rotates (angle set inline) */
+.veh-arrow {
+  display: block; width: 12px; height: 12px; flex: none;
+  transform-origin: 50% 50%;
+  transition: transform 0.3s ease-out;
+}
+.veh-arrow svg { display: block; width: 100%; height: 100%; fill: #fff; }
+
+/* middle: the KB brand bus mark, rendered pure white on the pill color
+ * (brightness(0) makes it black keeping alpha, invert(1) flips to white) */
+.veh-bus {
+  display: block; height: 13px; width: auto; flex: none;
+  filter: brightness(0) invert(1);
+  pointer-events: none;
+}
+
+/* right: line label, always upright */
+.veh-line { display: block; letter-spacing: 0.2px; text-shadow: 0 1px 1px rgba(0, 0, 0, 0.28); }
+
+.leaflet-marker-icon.veh-marker:hover .veh-pill,
+.leaflet-marker-icon.veh-marker:focus-visible .veh-pill {
+  transform: translate(-50%, -50%) scale(1.1);
+}
+
+/* user GPS location marker — blue pulsing dot */
+.user-loc-marker { background: none; border: 0; }
+.user-loc { position: relative; display: block; width: 22px; height: 22px; }
+.user-loc-dot {
+  position: absolute; inset: 6px; border-radius: 999px;
+  background: #2b83ff; border: 2.5px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+.user-loc-pulse {
+  position: absolute; inset: 0; border-radius: 999px;
+  background: rgba(43, 131, 255, 0.35);
+  animation: user-loc-pulse 1.8s cubic-bezier(0.2, 0.6, 0.4, 1) infinite;
+}
+@keyframes user-loc-pulse {
+  0% { transform: scale(0.5); opacity: 0.85; }
+  70%, 100% { transform: scale(1.7); opacity: 0; }
+}
+
+/* ---------- bus-stop markers (higher zoom only): sign + direction arrows ---------- */
+
+.stop-mk-icon { background: none; border: 0; }
+.stop-mk {
+  position: relative; width: 34px; height: 34px;
+  animation: pop 0.22s var(--ease-spring) backwards;
+}
+/* central sign: white rounded chip with a dark bus glyph */
+.stop-mk-sign {
+  position: absolute; top: 50%; left: 50%;
+  width: 20px; height: 20px; transform: translate(-50%, -50%);
+  display: grid; place-items: center;
+  border-radius: 7px;
+  background: #f4f7fa; color: #1d2b39;
+  border: 1.5px solid rgba(13, 16, 19, 0.55);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+.stop-mk-sign svg { width: 14px; height: 14px; }
+/* one wrapper per bearing: rotate the frame, arrow is pushed "north" then points out */
+.stop-dir {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  pointer-events: none;
+}
+.stop-dir-a {
+  width: 0; height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 8px solid #2b83ff;
+  transform: translateY(-13px);
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.45));
+}
+
+/* selected-stop pulse marker */
+.stop-ping { position: relative; width: 20px; height: 20px; }
+.stop-ping .ring {
+  position: absolute; inset: 0; border-radius: 999px;
+  border: 2px solid var(--color-primary);
+  animation: stop-ring 1.8s cubic-bezier(0.2, 0.6, 0.4, 1) infinite;
+}
+.stop-ping .core {
+  position: absolute; inset: 5px; border-radius: 999px;
+  background: var(--color-brand);
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+@keyframes stop-ring {
+  0% { transform: scale(0.6); opacity: 0.9; }
+  75%, 100% { transform: scale(1.7); opacity: 0; }
+}
+
+/* smooth glide between GPS fixes; frozen during zoom animation */
+.leaflet-marker-icon.veh-marker { transition: transform 0.9s linear; }
+.leaflet-zoom-anim .leaflet-marker-icon.veh-marker { transition: none; }
+.leaflet-marker-icon.veh-marker:hover { z-index: 10000 !important; }
+
+/* ---------- leaflet dark skin ---------- */
+
+.leaflet-container {
+  background: var(--color-bg);
+  font-family: var(--font-sans);
+  outline: none;
+}
+
+.leaflet-tooltip.kb-tooltip {
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  border: 1px solid var(--color-hairline);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  font-size: 12px;
+  padding: 4px 9px;
+}
+.leaflet-tooltip-top.kb-tooltip::before { border-top-color: var(--color-surface-2); }
+.leaflet-tooltip-bottom.kb-tooltip::before { border-bottom-color: var(--color-surface-2); }
+.leaflet-tooltip-left.kb-tooltip::before { border-left-color: var(--color-surface-2); }
+.leaflet-tooltip-right.kb-tooltip::before { border-right-color: var(--color-surface-2); }
+
+/* zoom control — desktop only (touch devices pinch) */
+.leaflet-bar { border: 1px solid var(--color-hairline) !important; box-shadow: var(--shadow-float); border-radius: 12px; overflow: hidden; }
+.leaflet-bar a {
+  background: var(--color-surface);
+  color: var(--color-text-mute);
+  border-bottom: 1px solid var(--color-hairline);
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.leaflet-bar a:hover, .leaflet-bar a:focus { background: var(--color-surface-3); color: #fff; }
+.leaflet-bar a.leaflet-disabled { background: var(--color-surface); color: var(--color-text-faint); }
+@media (max-width: 767px) {
+  .leaflet-control-zoom { display: none; }
+}
+
+.leaflet-control-attribution {
+  background: rgba(13, 16, 19, 0.6) !important;
+  color: var(--color-text-faint) !important;
+  font-size: 10px !important;
+  backdrop-filter: blur(4px);
+  border-radius: 6px 0 0 0;
+}
+.leaflet-control-attribution a { color: var(--color-text-mute) !important; }
+
+/* ---------- accessibility / motion ---------- */
+
+:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; border-radius: 8px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .leaflet-marker-icon.veh-marker { transition: none; }
+  .veh-wrap, .stop-ping .ring, .user-loc-pulse { animation: none; }
+  .veh-arrow, .veh-pill { transition: none; }
+  .skeleton { animation: none; }
+  *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+}
+

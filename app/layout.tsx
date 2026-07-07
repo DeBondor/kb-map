@@ -1,0 +1,24 @@
+import type { Metadata, Viewport } from "next";
+import "./globals.css";
+
+export const metadata: Metadata = {
+  title: "Komunikacja Beskidzka — mapa pojazdów na żywo",
+  description:
+    "Wszystkie autobusy Komunikacji Beskidzkiej na jednej mapie: pozycje na żywo, opóźnienia, rozkłady przystanków i trasy linii. Feed GTFS-RT (VehiclePositions) do pobrania.",
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  themeColor: "#0d1013",
+};
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="pl">
+      <body className="h-dvh overflow-hidden bg-bg font-sans text-text antialiased">
+        {children}
+      </body>
+    </html>
+  );
+}

@@ -1,0 +1,128 @@
+"use client";
+
+import { memo, useEffect, useMemo } from "react";
+import { CircleMarker, Marker, Polyline, Tooltip, useMap } from "react-leaflet";
+import L from "leaflet";
+import { hslColor } from "@/lib/client/format";
+import { makeVehicleIcon } from "@/lib/client/leafletIcons";
+import type { LatLng, TripView, Vehicle } from "@/lib/client/types";
+
+interface Props {
+  trip: TripView | null;
+  /** md+ — the panel docks left, so pad fitBounds on that side */
+  desktop: boolean;
+  /** vehicle the trip was opened from — drawn as a fallback so a tapped bus is
+   *  never invisible while its route loads or when the exec reports no position */
+  vehMeta: Vehicle | null;
+  /** fresh position/heading from the live poll (matched by exec id); drives the
+   *  marker so the tracked bus keeps moving while its route is open */
+  liveVehicle: Vehicle | null;
+}
+
+/** Heading quantized to 5° so the icon (and its DOM node) is only rebuilt on a
+ *  real heading change — keeps the CSS position glide between fixes alive. */
+function bearingBucket(b: number | null | undefined): number | null {
+  return b == null ? null : Math.round(b / 5) * 5;
+}
+
+function TripLayer({ trip, desktop, vehMeta, liveVehicle }: Props) {
+  const map = useMap();
+
+  const lineColor = trip ? hslColor(trip.line === "…" ? null : trip.line) : "";
+  const liveBB = bearingBucket(liveVehicle?.bearing);
+  /* primitive presence flags so the icon memo can key on values, not identities */
+  const hasLive = liveVehicle != null;
+  const hasTripVeh = trip?.vehicle != null;
+
+  const vehicleIcon = useMemo(() => {
+    if (!trip) return null;
+    // live fix present → line color + live heading arrow
+    if (liveVehicle) return makeVehicleIcon(trip.line, lineColor, liveBB);
+    if (trip.vehicle) return makeVehicleIcon(trip.line, lineColor, null);
+    // fallback to the clicked vehicle (live only), with its own line + heading
+    if (trip.isLive && vehMeta) {
+      const fLine = vehMeta.line || trip.line;
+      return makeVehicleIcon(fLine, hslColor(fLine === "…" ? null : fLine), vehMeta.bearing ?? null);
+    }
+    return null;
+    // Depend on the PRIMITIVES the icon is built from, not the object identities:
+    // the 5 s poll yields a fresh liveVehicle object every time, but its line,
+    // color and 5°-bucketed heading rarely change. Keying on primitives keeps the
+    // same L.DivIcon (and DOM node) so the marker CSS-glides between fixes instead
+    // of being torn down and jumping to each new position.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trip?.line, lineColor, hasLive, liveBB, hasTripVeh, trip?.isLive, vehMeta?.line, vehMeta?.bearing]);
+
+  // Fit bounds once per drawn trip, after routing settles — padded so the
+  // route is not hidden under the sheet (mobile) or the panel (desktop).
+  useEffect(() => {
+    if (!trip || trip.status !== "ready") return;
+    const pts: LatLng[] =
+      trip.routed && trip.routed.length >= 2
+        ? trip.routed
+        : trip.stops.map(({ s }): LatLng => [s.lat, s.lon]);
+    if (!pts.length) return;
+    const opts: L.FitBoundsOptions = desktop
+      ? { paddingTopLeft: [440, 60], paddingBottomRight: [60, 40] }
+      : // keep the route clear of the sheet at its default (half) snap ≈ 50dvh
+        { paddingTopLeft: [24, 80], paddingBottomRight: [24, Math.round(window.innerHeight * 0.52)] };
+    // the CSS reduced-motion reset can't reach Leaflet's JS-driven pan — gate it here
+    const reduce =
+      typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    map.fitBounds(L.latLngBounds(pts), { ...opts, animate: !reduce, duration: reduce ? 0 : 0.9 });
+  }, [trip?.gen, trip?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!trip) return null;
+
+  return (
+    <>
+      {trip.routed && trip.routed.length >= 2 && (
+        <>
+          {/* dark casing under the colored line */}
+          <Polyline
+            positions={trip.routed}
+            pathOptions={{ color: "#0d1013", weight: 9, opacity: 0.85, lineCap: "round", lineJoin: "round" }}
+          />
+          <Polyline
+            positions={trip.routed}
+            pathOptions={{ color: lineColor, weight: 4.5, opacity: 0.95, lineCap: "round", lineJoin: "round" }}
+          />
+        </>
+      )}
+      {trip.stops.map(({ t, s, selected }) => (
+        <CircleMarker
+          key={`${trip.gen}-${t.index}-${s.id}`}
+          center={[s.lat, s.lon]}
+          radius={selected ? 7 : 4.5}
+          pathOptions={{
+            color: selected ? "#ffd54a" : lineColor,
+            weight: selected ? 3 : 2,
+            fillOpacity: 1,
+            fillColor: "#ffffff",
+          }}
+        >
+          <Tooltip direction="top" sticky className="kb-tooltip">
+            {t.stop_name} · {t.departure_time}
+            {t.platform ? ` (peron ${t.platform})` : ""}
+          </Tooltip>
+        </CircleMarker>
+      ))}
+      {vehicleIcon && (() => {
+        // freshest source first: the live poll, then the exec's opening fix,
+        // then the clicked vehicle's own position
+        const pos: LatLng | null = liveVehicle
+          ? [liveVehicle.lat, liveVehicle.lon]
+          : trip.vehicle
+            ? [trip.vehicle.lat, trip.vehicle.lon]
+            : trip.isLive && vehMeta
+              ? [vehMeta.lat, vehMeta.lon]
+              : null;
+        return pos ? (
+          <Marker position={pos} icon={vehicleIcon} zIndexOffset={200} keyboard={false} />
+        ) : null;
+      })()}
+    </>
+  );
+}
+
+export default memo(TripLayer);

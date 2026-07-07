@@ -1,0 +1,155 @@
+# Komunikacja Beskidzka — GTFS + GTFS-Realtime
+
+Scraper i serwer mapy dla [Komunikacji Beskidzkiej](https://komunikacjabeskidzka.kiedyprzyjedzie.pl).
+Generuje statyczny feed **GTFS** oraz feed **GTFS-RT (VehiclePositions)** w protobufie z pozycjami wszystkich pojazdów na żywo, plus mapę Leaflet pokazującą wszystkie autobusy jednocześnie (a nie per-przystanek jak oryginał).
+
+Aplikacja to **Next.js 16 + TypeScript**: jeden proces Node serwuje mapę, JSON API i protobuf, a scraper live działa w tle w tym samym procesie (startowany automatycznie przez `instrumentation.ts`). Stary kod Pythona/FastAPI został usunięty z projektu.
+
+## Wymagania
+
+- Node.js 20+ (testowane na 24)
+- Windows / Linux / macOS
+
+```bash
+npm install
+```
+
+## Struktura
+
+```
+kb-gtfs/
+  app/                # Next.js App Router: strona mapy + endpointy /api/*
+  components/         # komponenty React (mapa Leaflet itd.)
+  lib/                # klient API KiedyPrzyjedzie, poller live, konfiguracja, budowanie GTFS-RT
+  scripts/
+    build-gtfs.ts     # builder statycznego GTFS (CLI, uruchamiany przez tsx)
+  instrumentation.ts  # startuje poller live razem z serwerem Next.js
+  output/
+    gtfs/             # wygenerowany statyczny GTFS (agency/stops/routes/trips/stop_times/shapes/calendar/feed_info + .zip)
+```
+
+## 1. Statyczny GTFS
+
+```bash
+npm run build:gtfs -- --date 2026-07-05
+```
+
+Opcje (po `--`):
+
+| Opcja | Domyślnie | Opis |
+|---|---|---|
+| `--date YYYY-MM-DD` | dziś | dzień serwisu |
+| `--out <dir>` | `output/gtfs` | katalog wyjściowy |
+| `--concurrency N` | 40 | równoległość HTTP |
+| `--no-zip` | (pakuje) | nie twórz `kb_gtfs.zip` |
+
+Wynik w `output/gtfs/`:
+- `stops.txt` — 956 przystanków z coords
+- `routes.txt` — linie (route_type=3 bus)
+- `trips.txt` — kursy z headsign i shape_id
+- `stop_times.txt` — czasy per przystanek
+- `shapes.txt` — geometria tras (punkty per przystanek)
+- `calendar.txt` — serwis na dany dzień
+- `agency.txt`, `feed_info.txt`
+- `kb_gtfs.zip` — paczka gotowa do importu
+
+## 2. Mapa live + GTFS-RT
+
+Tryb deweloperski:
+
+```bash
+npm run dev
+```
+
+Tryb produkcyjny:
+
+```bash
+npm run build
+npm start
+```
+
+Serwer na `http://localhost:8080`:
+
+| Endpoint | Opis |
+|---|---|
+| `/` | Mapa Leaflet z pojazdami na żywo |
+| `/api/vehicles` | Pozycje wszystkich pojazdów (JSON) |
+| `/api/gtfs-rt.pb` | **GTFS-RT VehiclePositions** (protobuf, standard) |
+| `/api/stops` | Wszystkie przystanki (JSON) |
+| `/api/stop/<designator>/departures` | Najbliższe odjazdy z przystanku (proxy do upstream) |
+| `/api/stop/<designator>/timetable?date=YYYY-MM-DD` | Rozkład przystanku na dzień, domyślnie dziś (proxy do upstream) |
+| `/api/trip/<tripId>?index=0` | Szczegóły kursu z rozkładu (proxy do upstream) |
+| `/api/trip_execution?exec_id=<id>&index=0` | Realizacja kursu — pozycja pojazdu; `exec_id` surowy, base64 robi serwer (proxy do upstream) |
+| `/api/announcements` | Komunikaty przewoźnika (proxy do upstream) |
+| `/api/health` | Status + liczniki |
+
+Mapa odświeża się automatycznie co kilka sekund. Pokazuje wszystkie pojazdy naraz, z kolorami linii, statusem (w trasie/na przystanku/opóźniony) i popupem (linia, kierunek, opóźnienie, trip_id).
+
+## Jak działa scrapowanie live
+
+Serwer nie wie z góry, które pojazdy jeżdżą. Poller (startowany razem z serwerem przez `instrumentation.ts`) pracuje w trzech rytmach:
+
+1. **Pełny skan co 180 s** (`KB_SCAN_INTERVAL`): odpytuje batched `/api/departures?places=...` dla **wszystkich 956 przystanków** w paczkach (domyślnie 100 przystanków na paczkę i 40 równoległych połączeń), zbiera unikalne `trip_execution_id` z aktywnych odjazdów (horyzont 2 h, `KB_CANDIDATE_HORIZON`), deduplikuje i odpytuje `/api/trip_execution/<base64(id)>/0` → `{vehicle:{lat,lon}, vehicle_trip_index, at_stop, ...}`
+2. **Smart scan co 60 s** (`KB_SMART_SCAN_INTERVAL`): tańszy skan przyrostowy pomiędzy pełnymi — wyłapuje nowe kursy bez odpytywania wszystkich przystanków
+3. **Refresh co 15 s** (`KB_REFRESH_INTERVAL`): odświeża pozycje tylko już aktywnych pojazdów
+
+404 dla `trip_execution` (kurs zeskanowany, ale pojazd jeszcze nie ruszył) jest cache'owane na 240 s (`KB_404_CACHE`).
+
+`trip_execution_id` jest base64 formatu `<line_id>:<trip_id>:<variant>` (np. `6404:739777:0`), osobnej przestrzeni niż statyczny `trip_id` — dlatego pozycje da się zdobyć tylko przez departures, nie z planu.
+
+## Notatki
+
+- 0 pojazdów po północy = normalne (nic nie jeździ). Pozycje pojawiają się w godzinach pracy (ok. 4:30–22:00).
+- `data-stops-revision` jest wykrywane automatycznie z HTML strony głównej (fallback: `6829`).
+- Podkład mapy to wektorowe kafelki OpenFreeMap (styl „liberty", bezkluczowe i możliwe do self-hostingu) — mapa renderuje się w całości u nas, bez zależności od `maps.i.kiedyprzyjedzie.pl`.
+- Poller startuje w procesie Next.js — nie ma osobnego procesu scrapera. `npm run dev` też go uruchamia.
+- Konfiguracja przez zmienne środowiskowe z prefiksem `KB_` (patrz niżej) — żadna nie jest wymagana, wszystko ma sensowne wartości domyślne.
+
+## Produkcja
+
+### Build standalone
+
+`next.config.ts` ma `output: "standalone"` — `npm run build` tworzy w `.next/standalone` samowystarczalny serwer z minimalnym `node_modules`:
+
+```bash
+npm run build
+cp -r .next/static .next/standalone/.next/static
+cp -r public .next/standalone/public   # jeśli katalog istnieje
+PORT=8080 HOSTNAME=0.0.0.0 node .next/standalone/server.js
+```
+
+Lokalnie wystarczy też zwykłe `npm run build && npm start` (port 8080). Na Windows: `start.bat` / `stop.bat`.
+
+### Docker
+
+```bash
+docker build -t kb-gtfs .
+docker run -d --name kb-gtfs -p 8080:8080 kb-gtfs
+```
+
+albo przez compose (opcjonalnie czyta `.env` z katalogu projektu):
+
+```bash
+docker compose up -d --build
+```
+
+### Zmienne środowiskowe
+
+Wzór w `.env.example`. Wszystkie opcjonalne:
+
+| Zmienna | Domyślnie | Opis |
+|---|---|---|
+| `KB_BASE_URL` | `https://komunikacjabeskidzka.kiedyprzyjedzie.pl` | adres bazowy upstream API |
+| `KB_CONCURRENCY` | `40` | równoległość HTTP scrapera |
+| `KB_HTTP_TIMEOUT` | `20` | timeout zapytania HTTP (s) |
+| `KB_SCAN_INTERVAL` | `180` | pełny skan wszystkich przystanków (s) |
+| `KB_SMART_SCAN_INTERVAL` | `60` | smart scan (s) |
+| `KB_REFRESH_INTERVAL` | `15` | odświeżanie pozycji aktywnych pojazdów (s) |
+| `KB_CANDIDATE_HORIZON` | `7200` | horyzont odjazdów przy skanie (s) |
+| `KB_404_CACHE` | `240` | cache odpowiedzi 404 dla trip_execution (s) |
+| `KB_BATCH_SIZE` | `100` | rozmiar paczki zapytań przy skanie |
+| `PORT` | `8080` | port serwera HTTP |
+
+### Healthcheck
+
+`GET /api/health` zwraca `{"status":"ok","stops":...,"scan_count":...,"last_scan":...,"vehicles":...}` — z tego korzysta `HEALTHCHECK` w Dockerfile i `compose.yaml`.

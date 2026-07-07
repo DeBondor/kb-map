@@ -1,0 +1,27 @@
+import { badRequest, upstreamError } from "@/lib/api-helpers";
+import { parseIntStrict, pyTruthy } from "@/lib/kb-api";
+import { getApi, startPoller } from "@/lib/poller-singleton";
+import { allowRequest, clientIp, tooManyRequests } from "@/lib/rate-limit";
+
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
+/** GET /api/trip_execution?exec_id=<raw id>&index=0 — upstream trip execution passthrough.
+ *  exec_id is base64-encoded before it reaches the upstream path, so it can't
+ *  rewrite the URL — no id-shape check needed here (unlike the path-param routes). */
+export async function GET(req: Request): Promise<Response> {
+  if (!allowRequest(clientIp(req))) return tooManyRequests();
+  const params = new URL(req.url).searchParams;
+  const execId = params.get("exec_id");
+  if (!execId) return badRequest("exec_id query parameter is required");
+  const rawIndex = params.get("index");
+  const index = rawIndex === null ? 0 : parseIntStrict(rawIndex);
+  if (index === null) return badRequest("index must be an integer");
+  try {
+    await startPoller();
+    const data = await getApi().fetchTripExecution(execId, index);
+    return Response.json(pyTruthy(data) ? data : {});
+  } catch (err) {
+    return upstreamError("trip_execution", err);
+  }
+}
