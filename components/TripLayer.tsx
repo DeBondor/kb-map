@@ -76,8 +76,8 @@ function TripLayer({ trip, desktop, vehMeta, liveVehicle }: Props) {
     if (!pts.length) return;
     const opts: L.FitBoundsOptions = desktop
       ? { paddingTopLeft: [440, 60], paddingBottomRight: [60, 40] }
-      : // keep the route clear of the sheet at its default (half) snap ≈ 50dvh
-        { paddingTopLeft: [24, 80], paddingBottomRight: [24, Math.round(window.innerHeight * 0.52)] };
+      : // keep the route clear of the sheet at its opening (peek) snap ≈ 25dvh
+        { paddingTopLeft: [24, 80], paddingBottomRight: [24, Math.round(window.innerHeight * 0.3)] };
     // the CSS reduced-motion reset can't reach Leaflet's JS-driven pan — gate it here
     const reduce =
       typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;

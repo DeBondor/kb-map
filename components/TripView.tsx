@@ -177,6 +177,8 @@ function TripView({ trip, desktop, vehMeta, liveVeh, onBack, onClose, onFocusSto
       desktop={desktop}
       onClose={onClose}
       ariaLabel={`Trasa linii ${trip.line}`}
+      /* open low so the drawn route dominates the screen; pull up for the timeline */
+      initialSnap="peek"
       header={header}
     >
       <div ref={scrollRef} className="kb-scroll h-full overflow-y-auto pb-5">

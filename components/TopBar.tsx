@@ -228,7 +228,7 @@ function TopBar({
   return (
     <div
       ref={rootRef}
-      className="absolute left-3 top-3 z-[1002] w-[min(400px,calc(100vw-24px))] md:left-1/2 md:-translate-x-1/2"
+      className="absolute left-3 top-[max(0.75rem,env(safe-area-inset-top))] z-[1002] w-[min(400px,calc(100vw-24px))] md:left-1/2 md:-translate-x-1/2"
     >
       {/* search bar */}
       <div className="surface flex h-12 items-center gap-2.5 rounded-full pl-4 pr-1.5">

@@ -5,14 +5,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 /**
  * The sheet element is always FULL (88dvh) tall; each snap slides it down so a
  * fraction of it shows: `full` reveals all of it, `half` a balanced split, and
- * `peek` a compact header strip that keeps the map — and the tracked vehicle —
- * in view. Only a deliberate flick below `peek` (or the ✕) dismisses it.
+ * `peek` a quarter-screen strip (header + first rows) that keeps most of the
+ * map — and the tracked vehicle — in view. Only a deliberate flick below
+ * `peek` (or the ✕) dismisses it.
  */
 const FULL = 0.88;
 const HALF = 0.5;
-const PEEK = 0.18;
+const PEEK = 0.25;
 
-type Snap = "peek" | "half" | "full";
+export type Snap = "peek" | "half" | "full";
 
 /** Visible fraction of the viewport at each snap. */
 const FRACTION: Record<Snap, number> = { peek: PEEK, half: HALF, full: FULL };
@@ -24,6 +25,9 @@ interface Props {
   /** md+ — render as a docked left panel instead of a draggable sheet */
   desktop: boolean;
   ariaLabel: string;
+  /** mobile snap the sheet opens at (default "half"); trips open at "peek"
+   *  so the route stays visible — the user pulls up for the full timeline */
+  initialSnap?: Snap;
   /** header content — on mobile this is the drag zone */
   header: React.ReactNode;
   children: React.ReactNode;
@@ -34,8 +38,8 @@ interface Props {
  * settle and drag-to-dismiss. Desktop: static panel docked under the search
  * bar. Pure CSS transforms — no animation library.
  */
-export default function BottomSheet({ onClose, desktop, ariaLabel, header, children }: Props) {
-  const [snap, setSnap] = useState<Snap>("half");
+export default function BottomSheet({ onClose, desktop, ariaLabel, initialSnap = "half", header, children }: Props) {
+  const [snap, setSnap] = useState<Snap>(initialSnap);
   const [dragY, setDragY] = useState<number | null>(null);
   /* first paint sits at translateY(100%), then transitions up to the snap */
   const [entered, setEntered] = useState(false);
@@ -191,6 +195,8 @@ export default function BottomSheet({ onClose, desktop, ariaLabel, header, child
         transform: entered ? `translateY(${y}px)` : "translateY(100%)",
         transition: dragY != null ? "none" : "transform 0.42s var(--ease-spring)",
         boxShadow: "var(--shadow-sheet)",
+        // standalone PWA / notched phones: keep content above the home indicator
+        paddingBottom: "env(safe-area-inset-bottom, 0px)",
       }}
     >
       <div
