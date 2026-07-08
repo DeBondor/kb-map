@@ -281,6 +281,6 @@ html, body { height: 100%; }
   .veh-wrap, .stop-ping .ring, .user-loc-pulse { animation: none; }
   .veh-arrow, .veh-pill { transition: none; }
   .skeleton { animation: none; }
-  *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+  *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
 }
 

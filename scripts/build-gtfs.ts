@@ -185,8 +185,36 @@ function writeGtfs(
 async function build(date: string, outDir: string, concurrency: number, doZip: boolean): Promise<void> {
   // validate early, like Python's dt.date.fromisoformat in _write_gtfs
   weekdayMonday0(date);
-  fs.mkdirSync(outDir, { recursive: true });
+  // Build into a temp sibling and swap in at the end, so a mid-build failure
+  // or a concurrent reader never sees a partially written feed. resolve()
+  // strips trailing separators, keeping the temp dir a true sibling.
+  const finalDir = path.resolve(outDir);
+  const tmpDir = `${finalDir}.tmp`;
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+  fs.mkdirSync(tmpDir, { recursive: true });
+  try {
+    await buildInto(date, tmpDir, concurrency, doZip);
+  } catch (err) {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    throw err;
+  }
+  // Publish by moving the old feed aside instead of deleting it first: any
+  // failure leaves either the old feed or the finished temp build on disk.
+  const oldDir = `${finalDir}.old`;
+  fs.rmSync(oldDir, { recursive: true, force: true });
+  if (fs.existsSync(finalDir)) fs.renameSync(finalDir, oldDir);
+  try {
+    fs.renameSync(tmpDir, finalDir);
+  } catch (err) {
+    if (fs.existsSync(oldDir)) fs.renameSync(oldDir, finalDir);
+    console.error(`[gtfs] publish failed; built feed left at ${tmpDir}`);
+    throw err;
+  }
+  fs.rmSync(oldDir, { recursive: true, force: true });
+  console.log(`[gtfs] published feed to ${finalDir}`);
+}
 
+async function buildInto(date: string, outDir: string, concurrency: number, doZip: boolean): Promise<void> {
   const api = new KbApi({ concurrency });
   const rev = await api.fetchRevision();
   console.log(`[gtfs] stops revision: ${rev}`);
@@ -244,8 +272,13 @@ async function build(date: string, outDir: string, concurrency: number, doZip: b
 
     const shapeId = `shp_${trip.tripId}`;
     ordered.forEach((ts, seq) => {
-      const st = ts.designator ? stopById.get(ts.designator) : undefined;
-      const stopId = ts.designator ? String(ts.designator) : ts.placeId || "";
+      const st = ts.designator != null ? stopById.get(ts.designator) : undefined;
+      const stopId = ts.designator != null
+        ? String(ts.designator)
+        : ts.placeId
+          ? stopByUrl.get(ts.placeId)?.stopId
+          : undefined;
+      if (stopId == null) return;
       stopTimesRows.push({
         trip_id: trip.tripId,
         arrival_time: fmtTime(ts.departureTime),

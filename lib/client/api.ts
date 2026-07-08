@@ -37,12 +37,16 @@ export function getTrip(tripId: string | number, signal?: AbortSignal): Promise<
   // rethrown AbortError from the first caller's signal would poison the promise
   // for everyone else awaiting it (e.g. leaving MapApp's trip stuck loading).
   // Resolve null on any error/abort and drop the key so a later caller retries.
-  const p = fetchJSON<Trip>(`/api/trip/${encodeURIComponent(key)}`, { signal, cache: "no-store" }).catch(
-    () => {
+  const p = fetchJSON<Trip>(`/api/trip/${encodeURIComponent(key)}`, { signal, cache: "no-store" })
+    .then((tr) => {
+      // {} = upstream had nothing — don't pin it for the session; a retry refetches
+      if (!tr?.times?.length) tripCache.delete(key);
+      return tr;
+    })
+    .catch(() => {
       tripCache.delete(key);
       return null;
-    },
-  );
+    });
   tripCache.set(key, p);
   capMap(tripCache, TRIP_CACHE_MAX);
   return p;

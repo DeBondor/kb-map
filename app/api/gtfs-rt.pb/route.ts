@@ -9,7 +9,7 @@ export async function GET(): Promise<Response> {
   try {
     await startPoller();
     const data = getPoller().toProtobuf();
-    return new Response(new Uint8Array(data), {
+    return new Response(data, {
       headers: {
         "Content-Type": "application/x-protobuf",
         "Content-Disposition": "attachment; filename=VehiclePositions.pb",

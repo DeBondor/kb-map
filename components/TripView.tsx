@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import BottomSheet from "@/components/BottomSheet";
 import { useNow } from "@/components/hooks";
 import { BackIcon, CloseIcon, ErrorState, IconButton, LineBadge } from "@/components/ui";
@@ -49,15 +49,38 @@ function TripView({ trip, desktop, vehMeta, liveVeh, onBack, onClose, onFocusSto
   const now = useNow();
   const scrollRef = useRef<HTMLDivElement>(null);
   const currentRef = useRef<HTMLLIElement>(null);
+  /* last-known live fix — when the vehicle drops off the 5 s feed mid-view
+     (finished/stale/pruned) keep the freshest progress instead of regressing
+     to the opening snapshot; reset whenever a different trip is shown
+     (setState-during-render is the sanctioned way to adjust state on prop change) */
+  const [lastLiveHeld, setLastLiveHeld] = useState<{ gen: number; veh: Vehicle | null; vti: number | null }>({
+    gen: trip.gen,
+    veh: null,
+    vti: null,
+  });
+  let lastLive = lastLiveHeld;
+  if (lastLive.gen !== trip.gen) {
+    lastLive = { gen: trip.gen, veh: null, vti: null };
+    setLastLiveHeld(lastLive);
+  }
+  if (liveVeh && lastLive.veh !== liveVeh) {
+    lastLive = {
+      gen: trip.gen,
+      veh: liveVeh,
+      vti: liveVeh.current_stop_sequence ?? lastLive.vti,
+    };
+    setLastLiveHeld(lastLive);
+  }
 
   const lineColor = hslColor(trip.line === "…" ? null : trip.line);
   const loading = trip.status === "loading";
   const failed = trip.status === "error";
   /* prefer the live poll's current stop over the (frozen) value the route was
-     opened with, so the highlight and "pojazd na" advance as the bus moves */
-  const liveVti = liveVeh ? liveVeh.current_stop_sequence : null;
+     opened with, so the highlight and "pojazd na" advance as the bus moves;
+     null from the poll (unknown upstream) falls through to the snapshot */
+  const liveVti = liveVeh?.current_stop_sequence ?? lastLive.vti;
   const vti = liveVti ?? trip.vti;
-  const eta = loading || failed ? "" : computeEta({ ...trip, vti }, now);
+  const eta = loading || failed ? "" : computeEta(trip, now, vti);
 
   /** schedule index → resolved physical stop (for fly-to on tap) */
   const stopByIndex = useMemo(() => {
@@ -74,7 +97,10 @@ function TripView({ trip, desktop, vehMeta, liveVeh, onBack, onClose, onFocusSto
 
   const direction = trip.direction || vehMeta?.headsign || "";
   const headerDelay =
-    liveVeh?.delay ?? vehMeta?.delay ?? trip.rawTimes[vti ?? -1]?.estimate?.time_diff ?? null;
+    (liveVeh ?? lastLive.veh)?.delay ??
+    vehMeta?.delay ??
+    trip.rawTimes[vti ?? -1]?.estimate?.time_diff ??
+    null;
   /* stops this course loops through (e.g. the SZCZYRK BIŁA spur on some 120s) —
      shown as a "przez …" badge so a via-the-loop run is obvious */
   const loopStops = useMemo(() => detectLoopStops(trip.rawTimes), [trip.rawTimes]);

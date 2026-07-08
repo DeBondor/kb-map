@@ -1,4 +1,4 @@
-import type { TripView, Vehicle } from "./types";
+import type { TripTime, TripView, Vehicle } from "./types";
 
 /** Komunikacja Beskidzka brand red. */
 export const BRAND = "#a6192e";
@@ -38,9 +38,35 @@ export function hhmmFromSecs(s: number | null | undefined): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
+const AGENCY_TZ = "Europe/Warsaw";
+let timeFmt: Intl.DateTimeFormat | null = null;
+let dateFmt: Intl.DateTimeFormat | null = null;
+
+/** Seconds since midnight in Europe/Warsaw — all schedule strings are agency
+ *  wall-clock, so the device-local clock must not leak into the math. */
 export function nowSecs(): number {
-  const n = new Date();
-  return n.getHours() * 3600 + n.getMinutes() * 60 + n.getSeconds();
+  try {
+    timeFmt ??= new Intl.DateTimeFormat("en-GB", {
+      timeZone: AGENCY_TZ,
+      hour12: false,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+    const parts = timeFmt.formatToParts(new Date());
+    let h = 0;
+    let m = 0;
+    let s = 0;
+    for (const p of parts) {
+      if (p.type === "hour") h = Number(p.value) % 24;
+      else if (p.type === "minute") m = Number(p.value);
+      else if (p.type === "second") s = Number(p.value);
+    }
+    return h * 3600 + m * 60 + s;
+  } catch {
+    const n = new Date();
+    return n.getHours() * 3600 + n.getMinutes() * 60 + n.getSeconds();
+  }
 }
 
 /** "o czasie" / "+X min" / "-X min" */
@@ -89,10 +115,21 @@ export function formatScan(lastScan: number | null | undefined, scanCount: numbe
   return scanCount ? `${t} (#${scanCount})` : t;
 }
 
+/** Today's date (YYYY-MM-DD) in Europe/Warsaw — not the device timezone. */
 export function todayISO(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  try {
+    dateFmt ??= new Intl.DateTimeFormat("en-CA", {
+      timeZone: AGENCY_TZ,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    return dateFmt.format(new Date());
+  } catch {
+    const d = new Date();
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  }
 }
 
 /**
@@ -123,15 +160,19 @@ export function detectLoopStops(times: Array<{ stop_name: string }>): string[] {
 }
 
 /** ETA line for the trip header — ported 1:1 from the original drawTrip(). */
-export function computeEta(trip: TripView, now: number): string {
-  const { stop, rawTimes, isLive, vti } = trip;
+export function computeEta(trip: TripView, now: number, liveVti?: number | null): string {
+  const { stop, rawTimes, isLive } = trip;
+  const vti = liveVti ?? trip.vti;
   let eta = "";
   if (stop) {
-    const st = rawTimes.find(
-      (t) =>
-        (t.designator != null && String(t.designator) === String(stop.id)) ||
-        t.place_id === stop.designator,
-    );
+    const matches = (t: TripTime) =>
+      (t.designator != null && String(t.designator) === String(stop.id)) ||
+      t.place_id === stop.designator;
+    // out-and-back spurs visit a stop twice — on a live trip prefer the visit
+    // the vehicle has not passed yet, falling back to the plain first match
+    const st =
+      (isLive && vti != null ? rawTimes.find((t, i) => i >= vti && matches(t)) : undefined) ??
+      rawTimes.find(matches);
     if (st) {
       const planned = secsFromHHMM(st.departure_time);
       const est = st.estimate?.time_diff;

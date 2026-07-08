@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import BottomSheet from "@/components/BottomSheet";
 import { useNow } from "@/components/hooks";
 import { CloseIcon, EmptyState, ErrorState, IconButton, LineBadge, SkeletonRows } from "@/components/ui";
@@ -41,6 +41,9 @@ function Chevron() {
 function StopView({ stop, desktop, onClose, onShowLive, onShowStatic }: Props) {
   const [tab, setTab] = useState<Tab>("live");
   const [liveRows, setLiveRows] = useState<DepartureRow[] | null>(null);
+  /* mirrors liveRows so the refresh closure can tell "have data" without going
+     stale — a failed 30 s background refresh must not nuke a list we show */
+  const liveRowsRef = useRef<DepartureRow[] | null>(null);
   const [liveErr, setLiveErr] = useState(false);
   const [liveTick, setLiveTick] = useState(0);
   const [tt, setTt] = useState<TtRow[] | null>(null);
@@ -61,11 +64,14 @@ function StopView({ stop, desktop, onClose, onShowLive, onShowStatic }: Props) {
           { cache: "no-store", signal: ac.signal },
         );
         if (!cancelled) {
-          setLiveRows(d.rows ?? []);
+          liveRowsRef.current = d.rows ?? [];
+          setLiveRows(liveRowsRef.current);
           setLiveErr(false);
         }
       } catch {
-        if (!cancelled && !ac.signal.aborted) setLiveErr(true);
+        // only surface the error sheet when there is nothing to show; with a
+        // list on screen stay silent and let the next 30 s tick retry
+        if (!cancelled && !ac.signal.aborted && liveRowsRef.current === null) setLiveErr(true);
       }
     })();
     return () => {
@@ -178,6 +184,7 @@ function StopView({ stop, desktop, onClose, onShowLive, onShowStatic }: Props) {
             <ErrorState
               onRetry={() => {
                 setLiveErr(false);
+                liveRowsRef.current = null;
                 setLiveRows(null);
                 setLiveTick((t) => t + 1);
               }}

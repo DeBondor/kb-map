@@ -43,9 +43,13 @@ export default function BottomSheet({ onClose, desktop, ariaLabel, header, child
     const raf = requestAnimationFrame(() => setEntered(true));
     return () => cancelAnimationFrame(raf);
   }, []);
-  const start = useRef<{ y: number; t: number; base: number; target: HTMLElement | null } | null>(
-    null,
-  );
+  const start = useRef<{
+    id: number;
+    y: number;
+    t: number;
+    base: number;
+    target: HTMLElement | null;
+  } | null>(null);
   const lastMove = useRef<{ y: number; t: number } | null>(null);
   const sheetRef = useRef<HTMLElement>(null);
   const restoreRef = useRef<HTMLElement | null>(null);
@@ -73,11 +77,14 @@ export default function BottomSheet({ onClose, desktop, ariaLabel, header, child
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
       if (desktop) return;
+      // one drag at a time — a second finger must not re-base the gesture
+      if (start.current != null || !e.isPrimary) return;
       // Never start a drag (or capture the pointer) on an interactive control in
       // the header — ✕, back, tabs. Capturing here retargets the follow-up click
       // to this wrapper on touch engines, so those buttons would appear dead.
       if ((e.target as HTMLElement).closest?.("button,a,input")) return;
       start.current = {
+        id: e.pointerId,
         y: e.clientY,
         t: e.timeStamp,
         base: baseY(snap),
@@ -91,14 +98,15 @@ export default function BottomSheet({ onClose, desktop, ariaLabel, header, child
 
   /* a system-initiated cancel (gesture nav, call overlay) must NOT run the
      velocity/dismiss projection — just abandon the drag and settle back */
-  const onPointerCancel = useCallback(() => {
+  const onPointerCancel = useCallback((e: React.PointerEvent) => {
+    if (start.current == null || e.pointerId !== start.current.id) return;
     start.current = null;
     lastMove.current = null;
     setDragY(null);
   }, []);
 
   const onPointerMove = useCallback((e: React.PointerEvent) => {
-    if (!start.current) return;
+    if (!start.current || e.pointerId !== start.current.id) return;
     lastMove.current = { y: e.clientY, t: e.timeStamp };
     const dy = e.clientY - start.current.y;
     let y = start.current.base + dy;
@@ -109,11 +117,12 @@ export default function BottomSheet({ onClose, desktop, ariaLabel, header, child
   const onPointerUp = useCallback(
     (e: React.PointerEvent) => {
       const st = start.current;
-      start.current = null;
       if (st == null) {
         setDragY(null);
         return;
       }
+      if (e.pointerId !== st.id) return;
+      start.current = null;
       const h = vh();
       const moved = Math.abs(e.clientY - st.y);
       /* a tap (barely moved, quick) on the collapsed strip expands it — but a

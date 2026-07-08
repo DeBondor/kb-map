@@ -62,7 +62,12 @@ export function useGeolocation() {
       return;
     }
     // already watching → keep the fix, caller re-centers on the current pos
-    if (watchId.current != null) return;
+    // (resync status so a transient error before the first fix doesn't leave
+    //  the button stuck outside the active/locating states forever)
+    if (watchId.current != null) {
+      setStatus((s) => (s === "error" ? "locating" : s));
+      return;
+    }
     setStatus("locating");
     watchId.current = navigator.geolocation.watchPosition(
       (p) => {

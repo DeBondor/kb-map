@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useMemo } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { CircleMarker, Marker, Polyline, Tooltip, useMap } from "react-leaflet";
 import L from "leaflet";
 import { hslColor } from "@/lib/client/format";
@@ -28,16 +28,28 @@ function bearingBucket(b: number | null | undefined): number | null {
 function TripLayer({ trip, desktop, vehMeta, liveVehicle }: Props) {
   const map = useMap();
 
+  /* last non-null live fix — if the vehicle drops off the poll mid-view
+   * (finished/pruned) the marker holds there instead of teleporting back to
+   * the opening snapshot; keyed by trip generation (not execId) so closing and
+   * reopening the same exec starts clean instead of resurrecting an old fix
+   * (setState-during-render is the sanctioned way to adjust state on prop change) */
+  const gen = trip?.gen ?? -1;
+  const [lastLiveHeld, setLastLiveHeld] = useState<{ gen: number; veh: Vehicle } | null>(null);
+  if (liveVehicle && (lastLiveHeld?.veh !== liveVehicle || lastLiveHeld.gen !== gen)) {
+    setLastLiveHeld({ gen, veh: liveVehicle });
+  }
+  const lastLive = liveVehicle ?? (lastLiveHeld && lastLiveHeld.gen === gen ? lastLiveHeld.veh : null);
+
   const lineColor = trip ? hslColor(trip.line === "…" ? null : trip.line) : "";
-  const liveBB = bearingBucket(liveVehicle?.bearing);
+  const liveBB = bearingBucket(lastLive?.bearing);
   /* primitive presence flags so the icon memo can key on values, not identities */
-  const hasLive = liveVehicle != null;
+  const hasLive = lastLive != null;
   const hasTripVeh = trip?.vehicle != null;
 
   const vehicleIcon = useMemo(() => {
     if (!trip) return null;
     // live fix present → line color + live heading arrow
-    if (liveVehicle) return makeVehicleIcon(trip.line, lineColor, liveBB);
+    if (lastLive) return makeVehicleIcon(trip.line, lineColor, liveBB);
     if (trip.vehicle) return makeVehicleIcon(trip.line, lineColor, null);
     // fallback to the clicked vehicle (live only), with its own line + heading
     if (trip.isLive && vehMeta) {
@@ -69,7 +81,12 @@ function TripLayer({ trip, desktop, vehMeta, liveVehicle }: Props) {
     // the CSS reduced-motion reset can't reach Leaflet's JS-driven pan — gate it here
     const reduce =
       typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    map.fitBounds(L.latLngBounds(pts), { ...opts, animate: !reduce, duration: reduce ? 0 : 0.9 });
+    // a single point makes zero-size bounds → fitBounds would compute zoom Infinity
+    if (pts.length === 1) {
+      map.setView(pts[0], 16, { animate: !reduce, duration: reduce ? 0 : 0.9 });
+      return;
+    }
+    map.fitBounds(L.latLngBounds(pts), { ...opts, maxZoom: 17, animate: !reduce, duration: reduce ? 0 : 0.9 });
   }, [trip?.gen, trip?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!trip) return null;
@@ -108,10 +125,10 @@ function TripLayer({ trip, desktop, vehMeta, liveVehicle }: Props) {
         </CircleMarker>
       ))}
       {vehicleIcon && (() => {
-        // freshest source first: the live poll, then the exec's opening fix,
-        // then the clicked vehicle's own position
-        const pos: LatLng | null = liveVehicle
-          ? [liveVehicle.lat, liveVehicle.lon]
+        // freshest source first: the last live fix from the poll, then the
+        // exec's opening fix, then the clicked vehicle's own position
+        const pos: LatLng | null = lastLive
+          ? [lastLive.lat, lastLive.lon]
           : trip.vehicle
             ? [trip.vehicle.lat, trip.vehicle.lon]
             : trip.isLive && vehMeta

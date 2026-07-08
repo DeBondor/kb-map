@@ -12,12 +12,12 @@ function envStr(name: string, def: string): string {
   return v !== undefined && v !== "" ? v : def;
 }
 
-/** Read an integer env var, falling back to `def` when unset/invalid. */
-function envInt(name: string, def: number): number {
-  const v = process.env[name];
+/** Read an integer env var, falling back to `def` when unset/invalid or below `min`. */
+function envInt(name: string, def: number, min = 1): number {
+  const v = process.env[name]?.trim();
   if (v === undefined || v === "") return def;
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.trunc(n) : def;
+  const n = Math.trunc(Number(v));
+  return Number.isFinite(n) && n >= min ? n : def;
 }
 
 export const BASE_URL = envStr("KB_BASE_URL", "https://komunikacjabeskidzka.kiedyprzyjedzie.pl");
@@ -38,16 +38,19 @@ export const RT_DIR = envStr("KB_RT_DIR", path.join(OUTPUT_DIR, "rt"));
 export const HTTP_TIMEOUT = envInt("KB_HTTP_TIMEOUT", 20);
 export const DEFAULT_CONCURRENCY = envInt("KB_CONCURRENCY", 40);
 
+/** Global rate-limit backstop across all clients (sustained requests/sec). */
+export const RATE_LIMIT_GLOBAL = envInt("KB_RATE_LIMIT_GLOBAL", 500);
+
 /** Live poller tuning (all in seconds unless noted). */
 export const LIVE_FULL_SCAN_INTERVAL = envInt("KB_SCAN_INTERVAL", 180);
 export const LIVE_REFRESH_INTERVAL = envInt("KB_REFRESH_INTERVAL", 15);
 export const LIVE_CANDIDATE_HORIZON_SEC = envInt("KB_CANDIDATE_HORIZON", 7200);
-export const LIVE_404_CACHE_SEC = envInt("KB_404_CACHE", 240);
-export const LIVE_STOP_EMPTY_CACHE_SEC = envInt("KB_STOP_EMPTY_CACHE", 600);
-export const LIVE_STOP_FAR_CACHE_SEC = envInt("KB_STOP_FAR_CACHE", 300);
+export const LIVE_404_CACHE_SEC = envInt("KB_404_CACHE", 240, 0);
+export const LIVE_STOP_EMPTY_CACHE_SEC = envInt("KB_STOP_EMPTY_CACHE", 600, 0);
+export const LIVE_STOP_FAR_CACHE_SEC = envInt("KB_STOP_FAR_CACHE", 300, 0);
 export const LIVE_STOP_FAR_THRESHOLD_SEC = envInt("KB_STOP_FAR_THRESHOLD", 1800);
 export const LIVE_SMART_SCAN_INTERVAL = envInt("KB_SMART_SCAN_INTERVAL", 60);
-export const LIVE_SMART_SCAN_WINDOW_SEC = envInt("KB_SMART_SCAN_WINDOW", 600);
+export const LIVE_SMART_SCAN_WINDOW_SEC = envInt("KB_SMART_SCAN_WINDOW", 600, 0);
 export const LIVE_BATCH_SIZE = envInt("KB_BATCH_SIZE", 100);
 
 /**
@@ -59,7 +62,7 @@ export const LIVE_BATCH_SIZE = envInt("KB_BATCH_SIZE", 100);
  * put this long is a frozen feed, not a parked-but-live bus.
  */
 export const LIVE_STALE_VEHICLE_SEC = envInt("KB_STALE_VEHICLE_SEC", 300);
-export const LIVE_STALE_MOVE_EPS_M = envInt("KB_STALE_MOVE_EPS_M", 15);
+export const LIVE_STALE_MOVE_EPS_M = envInt("KB_STALE_MOVE_EPS_M", 15, 0);
 
 export const USER_AGENT = envStr(
   "KB_USER_AGENT",
@@ -77,10 +80,27 @@ export function routeTypeFor(lineType: string | null | undefined, _vehicleType?:
   return 3;
 }
 
-/** Local-time "YYYY-MM-DD", matching Python's datetime.date.today().isoformat(). */
+let isoDateFmt: Intl.DateTimeFormat | undefined;
+
+/**
+ * Agency-local "YYYY-MM-DD" (matching Python's datetime.date.today().isoformat()).
+ * Uses AGENCY_TIMEZONE explicitly instead of the process-local clock, so the
+ * default date stays correct when the server runs on UTC — see nowSecs() in
+ * lib/poller.ts.
+ */
 export function todayLocalISO(): string {
-  const d = new Date();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${d.getFullYear()}-${mm}-${dd}`;
+  try {
+    isoDateFmt ??= new Intl.DateTimeFormat("en-CA", {
+      timeZone: AGENCY_TIMEZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    return isoDateFmt.format(new Date());
+  } catch {
+    const d = new Date();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${d.getFullYear()}-${mm}-${dd}`;
+  }
 }

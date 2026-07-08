@@ -9,7 +9,8 @@ export interface Vehicle {
   lat: number;
   lon: number;
   vehicle_type: number;
-  current_stop_sequence: number;
+  /** positional index of the vehicle's current stop; null when unknown upstream */
+  current_stop_sequence: number | null;
   at_stop: boolean;
   delay: number | null;
   bearing: number | null;

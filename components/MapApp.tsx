@@ -171,6 +171,27 @@ export default function MapApp() {
     [],
   );
 
+  /* a trip opened before /api/stops resolved published an empty timeline —
+     rebuild it against the freshly loaded stop index (same gen, no refetch) */
+  const healedGenRef = useRef(-1);
+  useEffect(() => {
+    const t = trip;
+    if (stopsMaps.byId.size === 0 || !t) return;
+    if (t.gen !== genRef.current || t.gen === healedGenRef.current) return;
+    if (t.rawTimes.length === 0 || t.stops.length > 0) return;
+    healedGenRef.current = t.gen;
+    void buildTrip(
+      t.gen,
+      { times: t.rawTimes, line: { name: t.line }, direction: t.direction },
+      t.vehicle,
+      t.vti,
+      t.stop,
+      t.isLive,
+      t.note,
+      t.execId,
+    );
+  }, [stopsMaps, trip, buildTrip]);
+
   const openTripStatic = useCallback(
     async (tripId: string | number, stop: Stop | null, note: string | null = null) => {
       if (!tripId) return;
@@ -184,7 +205,7 @@ export default function MapApp() {
         tr = null; // getTrip resolves null on failure; guard anyway so we never hang on the spinner
       }
       if (gen !== genRef.current) return;
-      if (!tr) {
+      if (!tr || !tr.times?.length) {
         setTrip((prev) => (prev && prev.gen === gen ? { ...prev, status: "error" } : prev));
         return;
       }
@@ -217,7 +238,15 @@ export default function MapApp() {
             );
           return;
         }
-        await buildTrip(gen, resp.trip, resp.vehicle ?? null, resp.vehicle_trip_index ?? null, stop, true, null, execId);
+        // coerce like the server parses the same payload (parsePosition):
+        // upstream may send numeric strings; normalize to real numbers
+        const vLat = Number(resp.vehicle?.lat);
+        const vLon = Number(resp.vehicle?.lon);
+        const veh =
+          resp.vehicle && Number.isFinite(vLat) && Number.isFinite(vLon)
+            ? { lat: vLat, lon: vLon }
+            : null;
+        await buildTrip(gen, resp.trip, veh, resp.vehicle_trip_index ?? null, stop, true, null, execId);
       } catch {
         if (gen !== genRef.current) return;
         setTrip((prev) => (prev && prev.gen === gen ? { ...prev, status: "error" } : prev));
@@ -233,17 +262,47 @@ export default function MapApp() {
     else void openTripStatic(req.tripId, req.stop);
   }, [openTripLive, openTripStatic]);
 
-  const handleSelectStop = useCallback((s: Stop, opts?: { fly?: boolean }) => {
-    setSelectedStop(s);
-    if (opts?.fly && mapRef.current) {
-      const m = mapRef.current;
-      m.flyTo([s.lat, s.lon], Math.max(m.getZoom(), 16), { duration: 1.1, easeLinearity: 0.22 });
-    }
-  }, []);
+  const handleSelectStop = useCallback(
+    (s: Stop, opts?: { fly?: boolean }) => {
+      /* picking a stop while a trip route is drawn closes the trip so the
+         stop sheet actually shows (no-op when no trip is open) */
+      closeTrip();
+      setSelectedStop(s);
+      if (opts?.fly && mapRef.current) {
+        const m = mapRef.current;
+        m.flyTo([s.lat, s.lon], Math.max(m.getZoom(), 16), { duration: 1.1, easeLinearity: 0.22 });
+      }
+    },
+    [closeTrip],
+  );
 
   /* stable identities so memo(TopBar) survives the 5 s vehicle poll re-render */
   const toggleStops = useCallback(() => setStopsVisible((v) => !v), []);
   const pickStopFly = useCallback((s: Stop) => handleSelectStop(s, { fly: true }), [handleSelectStop]);
+
+  /* stable identities for the memo()-ized sheets (TripPanel / StopView) */
+  const handleCloseAll = useCallback(() => {
+    closeTrip();
+    setSelectedStop(null);
+  }, [closeTrip]);
+
+  const handleCloseStop = useCallback(() => setSelectedStop(null), []);
+
+  const handleShowLive = useCallback(
+    (execId: string, tripId: string | number | null) => {
+      setVehMeta(null);
+      void openTripLive(execId, tripId, selectedStop);
+    },
+    [openTripLive, selectedStop],
+  );
+
+  const handleShowStatic = useCallback(
+    (tripId: string | number) => {
+      setVehMeta(null);
+      void openTripStatic(tripId, selectedStop);
+    },
+    [openTripStatic, selectedStop],
+  );
 
   const handleVehicleClick = useCallback(
     (v: Vehicle) => {
@@ -305,6 +364,7 @@ export default function MapApp() {
       <MapContainer
         center={[49.822, 19.046]}
         zoom={11}
+        maxZoom={19}
         zoomControl={false}
         className="absolute inset-0 z-0 h-full w-full"
       >
@@ -375,10 +435,7 @@ export default function MapApp() {
           vehMeta={vehMeta}
           liveVeh={liveTripVeh}
           onBack={tripFromStop ? closeTrip : null}
-          onClose={() => {
-            closeTrip();
-            setSelectedStop(null);
-          }}
+          onClose={handleCloseAll}
           onFocusStop={handleFocusStop}
           onRetry={retryTrip}
         />
@@ -388,15 +445,9 @@ export default function MapApp() {
             key={selectedStop.designator}
             stop={selectedStop}
             desktop={desktop}
-            onClose={() => setSelectedStop(null)}
-            onShowLive={(execId, tripId) => {
-              setVehMeta(null);
-              void openTripLive(execId, tripId, selectedStop);
-            }}
-            onShowStatic={(tripId) => {
-              setVehMeta(null);
-              void openTripStatic(tripId, selectedStop);
-            }}
+            onClose={handleCloseStop}
+            onShowLive={handleShowLive}
+            onShowStatic={handleShowStatic}
           />
         )
       )}

@@ -211,6 +211,15 @@ export class LivePoller {
   lastRefresh = 0;
   scanCount = 0;
 
+  /** Bumped whenever `positions` actually changes; keys the snapshot caches. */
+  private snapshotVersion = 0;
+  /** Epoch secs of the last proven upstream contact (any successful position
+   *  fetch or departures batch) — served as the feed timestamp, so it goes
+   *  stale only when the scraper is actually cut off from the upstream. */
+  private lastGoodRefresh = Math.floor(Date.now() / 1000);
+  private jsonCache: { key: string; value: VehiclesResponse } | null = null;
+  private pbCache: { key: string; value: Uint8Array<ArrayBuffer> } | null = null;
+
   /** exec_id -> epoch secs at which the 404 was observed. */
   private notFound = new Map<string, number>();
   /** stop url_id -> epoch secs before which the stop must not be rescanned. */
@@ -250,6 +259,9 @@ export class LivePoller {
   async start(): Promise<void> {
     if (this.started) return;
     await this.loadStops();
+    if (this.stops.length === 0) {
+      throw new Error("poller start failed: upstream returned an empty stop list");
+    }
     if (this.started) return;
     this.started = true;
     this.stopCtl = new AbortController();
@@ -286,13 +298,17 @@ export class LivePoller {
         if (signal.aborted) break;
         const now = Date.now() / 1000;
         try {
-          if (now - lastSmart >= this.smartScanInterval) {
-            await this.smartScan();
-            lastSmart = now;
-          }
           await this.refreshActive();
         } catch (err) {
           log.error("rt", `refresh error: ${err}`);
+        }
+        if (now - lastSmart >= this.smartScanInterval) {
+          lastSmart = now;
+          try {
+            await this.smartScan();
+          } catch (err) {
+            log.error("rt", `smart scan error: ${err}`);
+          }
         }
         this.lastRefresh = Date.now() / 1000;
       }
@@ -313,11 +329,26 @@ export class LivePoller {
     const stopByUrl = new Map(toScan.map((s) => [s.urlId, s]));
     const batches: string[][] = [];
     for (let i = 0; i < ids.length; i += this.batchSize) batches.push(ids.slice(i, i + this.batchSize));
-    const results = await Promise.all(batches.map((b) => this.api.fetchMultipleDepartures(b)));
+    const results = await Promise.all(
+      batches.map(async (b): Promise<{ ok: boolean; resp: unknown }> => {
+        try {
+          return { ok: true, resp: await this.api.fetchMultipleDepartures(b) };
+        } catch (err) {
+          log.error("rt", `departures batch failed: ${err}`);
+          return { ok: false, resp: null };
+        }
+      }),
+    );
+    // any successful batch proves upstream contact — keeps the feed timestamp
+    // honest overnight when there are no vehicles to refresh, while a dead
+    // upstream stops advancing it
+    if (results.some((r) => r.ok)) this.lastGoodRefresh = Math.floor(nowTs);
 
     for (let bi = 0; bi < batches.length; bi++) {
       const batchIds = batches[bi];
-      const resp = results[bi];
+      const { ok, resp } = results[bi];
+      // failed fetch: not a completed scan of these stops — stamp nothing
+      if (!ok) continue;
       if (!pyTruthy(resp)) {
         for (const uid of batchIds) {
           const s = stopByUrl.get(uid)!;
@@ -425,7 +456,9 @@ export class LivePoller {
 
     const { perTrip, rowsByTrip } = await this.scanStopsBatched(toScan, now, nowTs, this.smartScanInterval);
 
-    const candidates: Array<[string, number]> = [...perTrip.entries()].filter(([, mnd]) => mnd <= now + this.horizon);
+    const candidates: Array<[string, number]> = [...perTrip.entries()].filter(
+      ([eid, mnd]) => mnd <= now + this.horizon && !this.positions.has(eid),
+    );
     if (candidates.length > 0) {
       await this.fetchPositions(candidates, rowsByTrip);
     }
@@ -448,50 +481,68 @@ export class LivePoller {
   ): Promise<void> {
     const nowTs = Math.floor(Date.now() / 1000);
     const cacheCut = nowTs - this.cache404;
+    let fetchOk = 0;
 
-    const results = await Promise.all(
-      candidates.map(async ([eid]): Promise<[string, unknown, boolean]> => {
-        const nf = this.notFound.get(eid);
-        // cached 404 still fresh → skip the fetch, but DON'T re-stamp it below;
-        // re-stamping every scan would slide the TTL forever (scanInterval <
-        // cache404) and permanently hide a bus that 404'd once (dispatched late).
-        if (nf !== undefined && nf > cacheCut && !this.positions.has(eid)) return [eid, null, false];
-        return [eid, await this.api.fetchTripExecution(eid, 0), true];
-      }),
-    );
-
-    for (const [eid, resp, fetched] of results) {
-      if (!fetched) continue; // cached 404 skip: leave the original timestamp to age out
-      if (!pyTruthy(resp)) {
-        this.notFound.set(eid, nowTs);
-        this.positions.delete(eid);
-        continue;
-      }
-      const pos = this.parsePosition(eid, asRecord(resp));
-      if (pos) {
-        // Carry the movement anchor across refreshes: reset it (and mark "moved
-        // now") only when the vehicle has travelled past the epsilon; otherwise
-        // keep the previous anchor so a slowly-drifting bus still counts as
-        // moving while a bit-frozen feed accrues stale time.
-        const prev = this.positions.get(eid);
-        if (prev) {
-          const moved = metersBetween(pos.lat, pos.lon, prev.anchorLat, prev.anchorLon);
-          if (moved > config.LIVE_STALE_MOVE_EPS_M) {
-            pos.anchorLat = pos.lat;
-            pos.anchorLon = pos.lon;
-            pos.lastMovedAt = pos.updatedAt;
-          } else {
-            pos.anchorLat = prev.anchorLat;
-            pos.anchorLon = prev.anchorLon;
-            pos.lastMovedAt = prev.lastMovedAt;
+    try {
+      const results = await Promise.all(
+        candidates.map(async ([eid]): Promise<[string, unknown, boolean]> => {
+          const nf = this.notFound.get(eid);
+          // cached 404 still fresh → skip the fetch, but DON'T re-stamp it below;
+          // re-stamping every scan would slide the TTL forever (scanInterval <
+          // cache404) and permanently hide a bus that 404'd once (dispatched late).
+          if (nf !== undefined && nf > cacheCut && !this.positions.has(eid)) return [eid, null, false];
+          try {
+            const resp = await this.api.fetchTripExecution(eid, 0);
+            fetchOk += 1;
+            return [eid, resp, true];
+          } catch (err) {
+            // fetch error is not a 404: keep the previous position, don't stamp notFound
+            log.error("rt", `trip execution fetch failed for ${eid}: ${err}`);
+            return [eid, null, false];
           }
-        }
-        this.positions.set(eid, pos);
-        this.notFound.delete(eid);
-      }
-    }
+        }),
+      );
 
-    this.pruneDead(Date.now() / 1000);
+      let changed = false;
+      for (const [eid, resp, fetched] of results) {
+        if (!fetched) continue; // cached 404 / fetch error: leave existing state untouched
+        if (!pyTruthy(resp)) {
+          this.notFound.set(eid, nowTs);
+          if (this.positions.delete(eid)) changed = true;
+          continue;
+        }
+        const pos = this.parsePosition(eid, asRecord(resp));
+        if (pos) {
+          // Carry the movement anchor across refreshes: reset it (and mark "moved
+          // now") only when the vehicle has travelled past the epsilon; otherwise
+          // keep the previous anchor so a slowly-drifting bus still counts as
+          // moving while a bit-frozen feed accrues stale time.
+          const prev = this.positions.get(eid);
+          if (prev) {
+            const moved = metersBetween(pos.lat, pos.lon, prev.anchorLat, prev.anchorLon);
+            if (moved > config.LIVE_STALE_MOVE_EPS_M) {
+              pos.anchorLat = pos.lat;
+              pos.anchorLon = pos.lon;
+              pos.lastMovedAt = pos.updatedAt;
+            } else {
+              pos.anchorLat = prev.anchorLat;
+              pos.anchorLon = prev.anchorLon;
+              pos.lastMovedAt = prev.lastMovedAt;
+            }
+          }
+          this.positions.set(eid, pos);
+          this.notFound.delete(eid);
+          changed = true;
+        }
+      }
+      if (changed) this.snapshotVersion += 1;
+      // freshness = proven upstream contact: at least one fetch actually
+      // succeeded this cycle (a single flaky exec_id must not veto the stamp,
+      // and a zero-candidate run proves nothing)
+      if (fetchOk > 0) this.lastGoodRefresh = nowTs;
+    } finally {
+      this.pruneDead(Date.now() / 1000);
+    }
   }
 
   /**
@@ -506,11 +557,14 @@ export class LivePoller {
    */
   private pruneDead(nowEpoch: number): void {
     const hardMax = config.LIVE_STALE_VEHICLE_SEC * 3;
+    let pruned = false;
     for (const [eid, v] of this.positions) {
       if (v.finished || this.isStale(v, nowEpoch) || nowEpoch - v.updatedAt > hardMax) {
         this.positions.delete(eid);
+        pruned = true;
       }
     }
+    if (pruned) this.snapshotVersion += 1;
   }
 
   /** Evict expired 404 markers (keyed by unique per-day exec_id) so the
@@ -641,7 +695,7 @@ export class LivePoller {
       lat,
       lon,
       vehicleType: toInt(vtVal, 0),
-      currentStopSequence: toInt(pyTruthy(vti) ? vti : 0, 0),
+      currentStopSequence: isIdx(vti) ? vti : null,
       atStop,
       delay,
       timestamp: tsVal !== null ? toInt(tsVal, Math.floor(nowEpoch)) : Math.floor(nowEpoch),
@@ -663,9 +717,16 @@ export class LivePoller {
     return v.delay === null && nowEpoch - v.lastMovedAt > config.LIVE_STALE_VEHICLE_SEC;
   }
 
-  /** Live vehicles shown on the map: not frozen (stale feed) and not finished. */
+  /** Live vehicles shown on the map: not frozen (stale feed), not finished,
+   *  and successfully fetched recently (an upstream outage must not serve
+   *  last-known positions as live indefinitely). */
   private liveVehicles(nowEpoch: number): VehiclePos[] {
-    return [...this.positions.values()].filter((v) => !v.finished && !this.isStale(v, nowEpoch));
+    return [...this.positions.values()].filter(
+      (v) =>
+        !v.finished &&
+        !this.isStale(v, nowEpoch) &&
+        nowEpoch - v.updatedAt <= config.LIVE_STALE_VEHICLE_SEC,
+    );
   }
 
   /** Count of vehicles currently shown on the map (excludes frozen ghosts). */
@@ -673,22 +734,36 @@ export class LivePoller {
     return this.liveVehicles(Date.now() / 1000).length;
   }
 
+  /** Cache key: positions version + coarse 5s time bucket (the live filter is
+   *  time-dependent, so ghosts still age out between buckets). */
+  private snapshotKey(nowEpoch: number): string {
+    return `${this.snapshotVersion}:${Math.floor(nowEpoch / 5)}`;
+  }
+
   /** Snapshot of all live vehicles for GET /api/vehicles (frozen ghosts hidden). */
   toJson(): VehiclesResponse {
-    const live = this.liveVehicles(Date.now() / 1000);
-    return {
-      timestamp: Math.floor(Date.now() / 1000),
+    const nowEpoch = Date.now() / 1000;
+    const key = this.snapshotKey(nowEpoch);
+    if (this.jsonCache !== null && this.jsonCache.key === key) return this.jsonCache.value;
+    const live = this.liveVehicles(nowEpoch);
+    const value: VehiclesResponse = {
+      timestamp: this.lastGoodRefresh,
       scan_count: this.scanCount,
       last_scan: this.lastScan,
       count: live.length,
       vehicles: live.map(vehicleToJson),
     };
+    this.jsonCache = { key, value };
+    return value;
   }
 
   /** GTFS-Realtime VehiclePositions FeedMessage (binary; frozen ghosts hidden). */
-  toProtobuf(): Uint8Array {
+  toProtobuf(): Uint8Array<ArrayBuffer> {
+    const nowEpoch = Date.now() / 1000;
+    const key = this.snapshotKey(nowEpoch);
+    if (this.pbCache !== null && this.pbCache.key === key) return this.pbCache.value;
     const entity: transit_realtime.IFeedEntity[] = [];
-    for (const v of this.liveVehicles(Date.now() / 1000)) {
+    for (const v of this.liveVehicles(nowEpoch)) {
       const vehicle: transit_realtime.IVehiclePosition = {
         position: {
           latitude: v.lat,
@@ -701,7 +776,7 @@ export class LivePoller {
           ...(v.tripId ? { tripId: v.tripId } : {}),
           scheduleRelationship: rt.TripDescriptor.ScheduleRelationship.SCHEDULED,
         },
-        currentStopSequence: v.currentStopSequence,
+        ...(v.currentStopSequence !== null ? { currentStopSequence: v.currentStopSequence } : {}),
         currentStatus: v.atStop
           ? rt.VehiclePosition.VehicleStopStatus.STOPPED_AT
           : rt.VehiclePosition.VehicleStopStatus.IN_TRANSIT_TO,
@@ -716,10 +791,12 @@ export class LivePoller {
       header: {
         gtfsRealtimeVersion: "2.0",
         incrementality: rt.FeedHeader.Incrementality.FULL_DATASET,
-        timestamp: Math.floor(Date.now() / 1000),
+        timestamp: this.lastGoodRefresh,
       },
       entity,
     };
-    return rt.FeedMessage.encode(message).finish();
+    const value = new Uint8Array(rt.FeedMessage.encode(message).finish());
+    this.pbCache = { key, value };
+    return value;
   }
 }

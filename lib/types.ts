@@ -59,7 +59,8 @@ export interface VehiclePos {
   lat: number;
   lon: number;
   vehicleType: number;
-  currentStopSequence: number;
+  /** null when upstream's vehicle_trip_index is absent/invalid ("unknown") */
+  currentStopSequence: number | null;
   atStop: boolean;
   /** seconds, negative = early */
   delay: number | null;
@@ -89,7 +90,7 @@ export interface VehicleJson {
   lat: number;
   lon: number;
   vehicle_type: number;
-  current_stop_sequence: number;
+  current_stop_sequence: number | null;
   at_stop: boolean;
   delay: number | null;
   bearing: number | null;
