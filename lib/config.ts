@@ -51,7 +51,12 @@ export const LIVE_STOP_FAR_CACHE_SEC = envInt("KB_STOP_FAR_CACHE", 300, 0);
 export const LIVE_STOP_FAR_THRESHOLD_SEC = envInt("KB_STOP_FAR_THRESHOLD", 1800);
 export const LIVE_SMART_SCAN_INTERVAL = envInt("KB_SMART_SCAN_INTERVAL", 60);
 export const LIVE_SMART_SCAN_WINDOW_SEC = envInt("KB_SMART_SCAN_WINDOW", 600, 0);
-export const LIVE_BATCH_SIZE = envInt("KB_BATCH_SIZE", 100);
+/**
+ * Max stops per departures request. The upstream silently caps every
+ * `/api/departures?places=` response at 6 boards — stops past the cap are
+ * simply absent from the reply — so batches larger than 6 lose data.
+ */
+export const LIVE_BATCH_SIZE = envInt("KB_BATCH_SIZE", 6);
 
 /**
  * Stale-vehicle ("ghost") filter. The upstream keeps returning a vehicle's

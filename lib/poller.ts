@@ -369,8 +369,16 @@ export class LivePoller {
         const s = stopByUrl.get(uid)!;
         const depA = depsByDesig.get(s.stopId);
         const dep = pyTruthy(depA) ? depA : depsByDesig.get(uid);
-        const rows = dep !== undefined ? dep.rows : undefined;
-        if (dep === undefined || !pyTruthy(rows)) {
+        if (dep === undefined) {
+          // Board absent from the reply = truncation (upstream caps the number
+          // of boards per request), NOT an empty stop — it returns a board
+          // (with empty rows) even for stops with no departures. Stamping the
+          // empty-cache here would hide the stop's buses for the cache window;
+          // leave its state untouched so the next scan retries it.
+          continue;
+        }
+        const rows = dep.rows;
+        if (!pyTruthy(rows)) {
           this.stopRescanAt.set(s.urlId, nowTs + rescanOnEmpty);
           this.stopEarliest.delete(s.urlId);
           continue;

@@ -147,7 +147,7 @@ Wzór w `.env.example`. Wszystkie opcjonalne:
 | `KB_REFRESH_INTERVAL` | `15` | odświeżanie pozycji aktywnych pojazdów (s) |
 | `KB_CANDIDATE_HORIZON` | `7200` | horyzont odjazdów przy skanie (s) |
 | `KB_404_CACHE` | `240` | cache odpowiedzi 404 dla trip_execution (s) |
-| `KB_BATCH_SIZE` | `100` | rozmiar paczki zapytań przy skanie |
+| `KB_BATCH_SIZE` | `6` | rozmiar paczki zapytań przy skanie (upstream ucina odpowiedź do 6 tablic na zapytanie — większe wartości gubią przystanki) |
 | `PORT` | `8080` | port serwera HTTP |
 
 ### Healthcheck
