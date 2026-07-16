@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 import { swrFetcher } from "@/lib/client/api";
 import { nowSecs } from "@/lib/client/format";
-import type { StopsResponse, VehiclesResponse } from "@/lib/client/types";
+import type { LinesResponse, StopsResponse, VehiclesResponse } from "@/lib/client/types";
 
 /** Live vehicle positions, polled every 5 s, never HTTP-cached. */
 export function useVehicles() {
@@ -19,6 +19,16 @@ export function useVehicles() {
 /** Static stop list (~950 entries) — fetched once per session. */
 export function useStops() {
   return useSWR<StopsResponse>("/api/stops", swrFetcher, {
+    revalidateOnFocus: false,
+    revalidateIfStale: false,
+    revalidateOnReconnect: false,
+  });
+}
+
+/** Static GTFS line catalog — fetched once per session (called only from the
+ *  open command palette, so the request is lazy). */
+export function useLines() {
+  return useSWR<LinesResponse>("/api/lines", swrFetcher, {
     revalidateOnFocus: false,
     revalidateIfStale: false,
     revalidateOnReconnect: false,

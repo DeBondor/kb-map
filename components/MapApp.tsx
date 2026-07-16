@@ -2,8 +2,8 @@
 
 import "leaflet/dist/leaflet.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Circle, MapContainer, Marker, TileLayer, ZoomControl, useMap } from "react-leaflet";
-import type L from "leaflet";
+import { AttributionControl, Circle, MapContainer, Marker, TileLayer, ZoomControl, useMap } from "react-leaflet";
+import L from "leaflet";
 import { fetchJSON, fetchRoute, getTrip } from "@/lib/client/api";
 import { makeStopPingIcon, makeUserLocationIcon } from "@/lib/client/leafletIcons";
 import type {
@@ -16,14 +16,16 @@ import type {
   Vehicle,
 } from "@/lib/client/types";
 import { useGeolocation, useIsDesktop, useStops, useVehicles } from "@/components/hooks";
+import CommandPalette from "@/components/CommandPalette";
+import LineFilterChip from "@/components/LineFilterChip";
 import LocateButton from "@/components/LocateButton";
-import TopBar, { BASE_LAYERS, type BaseLayerId } from "@/components/TopBar";
+import TopBar, { BASE_LAYERS, RASTER_FALLBACK, type BaseLayerId } from "@/components/TopBar";
 import StopView from "@/components/StopView";
 import TripPanel from "@/components/TripView";
 import VehicleLayer from "@/components/VehicleLayer";
 import StopsLayer from "@/components/StopsLayer";
 import TripLayer from "@/components/TripLayer";
-import VectorBaseLayer from "@/components/VectorBaseLayer";
+import VectorBaseLayer, { type BasemapStatus } from "@/components/VectorBaseLayer";
 
 const NOT_STARTED = "Pojazd jeszcze nie wyruszył";
 const LAYER_KEY = "kb:baseLayer";
@@ -75,10 +77,32 @@ export default function MapApp() {
   const [trip, setTrip] = useState<TripView | null>(null);
   const [vehMeta, setVehMeta] = useState<Vehicle | null>(null);
   const [baseLayer, setBaseLayerState] = useState<BaseLayerId>(() => {
-    return "kb";
+    // safe to touch window here — MapApp mounts behind the ssr:false boundary
+    try {
+      const v = window.localStorage.getItem(LAYER_KEY);
+      if (v && v in BASE_LAYERS) return v as BaseLayerId;
+    } catch {
+      /* private mode — ignore */
+    }
+    return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "kb";
   });
+  /* basemap readiness: veil while loading; one silent remount-retry on failure,
+     then swap to the raster fallback so the map never stays a blank void */
+  const [basemap, setBasemap] = useState<{ status: BasemapStatus; attempt: number }>({
+    status: "loading",
+    attempt: 0,
+  });
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  /* line names shown on the map; null = no filter (all vehicles) */
+  const [lineFilter, setLineFilter] = useState<ReadonlySet<string> | null>(null);
   const genRef = useRef(0);
   const lastReqRef = useRef<LastRequest | null>(null);
+  /* mirror of the 5 s poll so callbacks can read vehicles without depending
+     on them (dependency would rebuild the callback + re-render children) */
+  const vehiclesRef = useRef<Vehicle[]>([]);
+  useEffect(() => {
+    vehiclesRef.current = vehicles;
+  });
   const stopPingIcon = useMemo(() => makeStopPingIcon(), []);
   const userIcon = useMemo(() => makeUserLocationIcon(), []);
 
@@ -88,11 +112,21 @@ export default function MapApp() {
 
   const setBaseLayer = useCallback((id: BaseLayerId) => {
     setBaseLayerState(id);
+    // switching styles gets a fresh vector attempt even after a raster fallback
+    setBasemap({ status: "loading", attempt: 0 });
     try {
       window.localStorage.setItem(LAYER_KEY, id);
     } catch {
       /* private mode — ignore */
     }
+  }, []);
+
+  const handleBasemapStatus = useCallback((s: BasemapStatus) => {
+    setBasemap((prev) =>
+      s === "failed" && prev.attempt === 0
+        ? { status: "loading", attempt: 1 } // one silent retry: key change remounts the GL layer
+        : { ...prev, status: s },
+    );
   }, []);
 
   /* fast stop lookup: by internal id and by designator */
@@ -280,6 +314,42 @@ export default function MapApp() {
   const toggleStops = useCallback(() => setStopsVisible((v) => !v), []);
   const pickStopFly = useCallback((s: Stop) => handleSelectStop(s, { fly: true }), [handleSelectStop]);
 
+  /* command palette */
+  const openPalette = useCallback(() => setPaletteOpen(true), []);
+  const closePalette = useCallback(() => setPaletteOpen(false), []);
+
+  /* line filter — toggling a line on also frames its live vehicles */
+  const toggleLineFilter = useCallback(
+    (line: string) => {
+      const adding = !lineFilter?.has(line);
+      setLineFilter((prev) => {
+        const next = new Set(prev ?? []);
+        if (next.has(line)) next.delete(line);
+        else next.add(line);
+        return next.size ? next : null;
+      });
+      if (adding && mapRef.current) {
+        const vs = vehiclesRef.current.filter((v) => v.line === line);
+        if (vs.length) {
+          mapRef.current.fitBounds(
+            L.latLngBounds(vs.map((v): [number, number] => [v.lat, v.lon])),
+            { padding: [60, 60], maxZoom: 14 },
+          );
+        }
+      }
+    },
+    [lineFilter],
+  );
+  const clearLineFilter = useCallback(() => setLineFilter(null), []);
+  const filterLines = useMemo(() => (lineFilter ? [...lineFilter] : null), [lineFilter]);
+
+  /* "Wyczyść widok": close every sheet and drop the line filter */
+  const handleClearView = useCallback(() => {
+    closeTrip();
+    setSelectedStop(null);
+    setLineFilter(null);
+  }, [closeTrip]);
+
   /* stable identities for the memo()-ized sheets (TripPanel / StopView) */
   const handleCloseAll = useCallback(() => {
     closeTrip();
@@ -320,6 +390,9 @@ export default function MapApp() {
 
   const handleMap = useCallback((m: L.Map) => {
     mapRef.current = m;
+    // guard against a 0×0 container at mount (dvh reflow on mobile): re-measure
+    // once layout settles so the GL canvas isn't sized from an empty box
+    requestAnimationFrame(() => m.invalidateSize(false));
   }, []);
 
   /* locate button: start (or reuse) the GPS watch and recenter on the fix */
@@ -348,6 +421,17 @@ export default function MapApp() {
     }
   }, [geo.pos, flyToUser]);
 
+  /* palette "Moja lokalizacja": always fly-to-me — never the LocateButton's
+     toggle-off, which would surprise from a search action */
+  const paletteLocate = useCallback(() => {
+    if (geo.pos) {
+      flyToUser(geo.pos);
+      return;
+    }
+    wantFlyRef.current = true;
+    geo.locate();
+  }, [geo, flyToUser]);
+
   const tiles = BASE_LAYERS[baseLayer];
   /* trip opened from a stop → back returns to that stop's sheet */
   const tripFromStop = !!trip && trip.stop != null && selectedStop != null;
@@ -366,13 +450,26 @@ export default function MapApp() {
         zoom={11}
         maxZoom={19}
         zoomControl={false}
+        attributionControl={false}
         className="absolute inset-0 z-0 h-full w-full"
       >
+        {/* bottom-left, away from the zoom + locate column in the right corner */}
+        <AttributionControl position="bottomleft" prefix={false} />
         <MapBridge onMap={handleMap} />
-        {tiles.kind === "vector" ? (
-          <VectorBaseLayer key={baseLayer} style={tiles.style} filter={tiles.filter} />
+        {basemap.status !== "failed" && tiles.kind === "vector" ? (
+          <VectorBaseLayer
+            key={`${baseLayer}-${basemap.attempt}`}
+            style={tiles.style}
+            filter={tiles.filter}
+            onStatus={handleBasemapStatus}
+          />
         ) : (
-          <TileLayer key={baseLayer} url={tiles.url} maxZoom={19} attribution={tiles.attribution} />
+          <TileLayer
+            key={`fb-${baseLayer}`}
+            url={RASTER_FALLBACK[baseLayer].url}
+            maxZoom={19}
+            attribution={RASTER_FALLBACK[baseLayer].attribution}
+          />
         )}
         <ZoomControl position="bottomright" />
         <StopsLayer stops={stops} visible={stopsVisible} onSelect={handleSelectStop} />
@@ -387,7 +484,12 @@ export default function MapApp() {
         <TripLayer trip={trip} desktop={desktop} vehMeta={vehMeta} liveVehicle={liveTripVeh} />
         {/* while a route is drawn, hide the live fleet: the selected vehicle is
             already drawn by TripLayer (no duplicate) and the rest won't obscure it */}
-        <VehicleLayer vehicles={vehicles} onVehicleClick={handleVehicleClick} hidden={trip != null} />
+        <VehicleLayer
+          vehicles={vehicles}
+          onVehicleClick={handleVehicleClick}
+          hidden={trip != null}
+          lineFilter={lineFilter}
+        />
         {geo.pos && (
           <>
             {geo.pos.accuracy > 0 && geo.pos.accuracy < 2000 && (
@@ -409,19 +511,54 @@ export default function MapApp() {
         )}
       </MapContainer>
 
+      {/* dark veil until the basemap's first paint — liberty's background layer
+          is light, so without this a slow style/tile fetch reads as a white map */}
+      {basemap.status === "loading" && (
+        <div className="pointer-events-none absolute inset-0 z-[500] bg-bg animate-fade" aria-hidden>
+          <div className="skeleton absolute inset-0 rounded-none opacity-20" />
+        </div>
+      )}
+
       <TopBar
         count={vehData?.count ?? null}
         lastScan={vehData?.last_scan ?? null}
         scanCount={vehData?.scan_count ?? null}
         offline={!!vehError}
-        stops={stops}
-        vehicles={vehicles}
         stopsVisible={stopsVisible}
         onToggleStops={toggleStops}
-        onPickStop={pickStopFly}
-        onPickVehicle={handleVehicleClick}
         baseLayer={baseLayer}
         onBaseLayer={setBaseLayer}
+        onOpenPalette={openPalette}
+      />
+
+      {filterLines && (
+        <LineFilterChip
+          lines={filterLines}
+          visibleCount={lineFilter ? vehicles.filter((v) => lineFilter.has(v.line)).length : 0}
+          onClear={clearLineFilter}
+          onOpenPalette={openPalette}
+        />
+      )}
+
+      <CommandPalette
+        open={paletteOpen}
+        onOpen={openPalette}
+        onClose={closePalette}
+        stops={stops}
+        geoPos={paletteOpen ? geo.pos : null}
+        geoStatus={geo.status}
+        onLocate={paletteLocate}
+        onEnsureGeo={geo.locate}
+        onPickStop={pickStopFly}
+        onPickVehicle={handleVehicleClick}
+        stopsVisible={stopsVisible}
+        onToggleStops={toggleStops}
+        onClearView={handleClearView}
+        baseLayer={baseLayer}
+        onBaseLayer={setBaseLayer}
+        lineFilter={lineFilter}
+        onToggleLine={toggleLineFilter}
+        onClearLineFilter={clearLineFilter}
       />
 
       <LocateButton status={geo.status} onLocate={handleLocate} />

@@ -44,6 +44,21 @@ export interface StopsResponse {
   stops: Stop[];
 }
 
+/** Static GTFS line catalog entry (from /api/lines). */
+export interface LineInfo {
+  /** GTFS route_id, e.g. "L_102" */
+  id: string;
+  /** rider-facing line number, e.g. "102" */
+  name: string;
+  /** route_long_name — the terminus, e.g. "KANIÓW" */
+  terminus: string;
+}
+
+export interface LinesResponse {
+  count: number;
+  lines: LineInfo[];
+}
+
 /** Upstream departures passthrough row. */
 export interface DepartureRow {
   trip_execution_id?: string;

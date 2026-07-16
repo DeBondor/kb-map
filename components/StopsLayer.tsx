@@ -3,6 +3,7 @@
 import { memo, useEffect, useRef } from "react";
 import { useMap } from "react-leaflet";
 import L from "leaflet";
+import { displayStopName } from "@/lib/client/format";
 import { makeStopIcon } from "@/lib/client/leafletIcons";
 import type { Stop } from "@/lib/client/types";
 
@@ -71,7 +72,7 @@ function StopsLayer({ stops, visible, onSelect }: Props) {
             zIndexOffset: -50, // below the live vehicle pills
           });
           const label = document.createElement("span");
-          label.textContent = s.name;
+          label.textContent = displayStopName(s.name);
           m.bindTooltip(label, { direction: "top", offset: [0, -14], className: "kb-tooltip" });
           m.on("click", () => onSelectRef.current(s));
           m.addTo(group);

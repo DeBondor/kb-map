@@ -76,6 +76,7 @@ Serwer na `http://localhost:8080`:
 | `/api/vehicles` | Pozycje wszystkich pojazdów (JSON) |
 | `/api/gtfs-rt.pb` | **GTFS-RT VehiclePositions** (protobuf, standard) |
 | `/api/stops` | Wszystkie przystanki (JSON) |
+| `/api/lines` | Statyczny katalog linii z GTFS `routes.txt` (JSON; pusty gdy brak zbudowanego feedu) |
 | `/api/stop/<designator>/departures` | Najbliższe odjazdy z przystanku (proxy do upstream) |
 | `/api/stop/<designator>/timetable?date=YYYY-MM-DD` | Rozkład przystanku na dzień, domyślnie dziś (proxy do upstream) |
 | `/api/trip/<tripId>?index=0` | Szczegóły kursu z rozkładu (proxy do upstream) |

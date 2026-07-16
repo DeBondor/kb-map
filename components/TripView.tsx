@@ -4,7 +4,7 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import BottomSheet from "@/components/BottomSheet";
 import { useNow } from "@/components/hooks";
 import { BackIcon, CloseIcon, ErrorState, IconButton, LineBadge } from "@/components/ui";
-import { computeEta, delayClass, delayTxt, detectLoopStops, hhmmFromSecs, hslColor, secsFromHHMM } from "@/lib/client/format";
+import { computeEta, delayClass, delayTxt, detectLoopStops, displayStopName, hhmmFromSecs, hslColor, secsFromHHMM } from "@/lib/client/format";
 import type { Stop, TripView as TripViewState, Vehicle } from "@/lib/client/types";
 
 interface Props {
@@ -116,7 +116,7 @@ function TripView({ trip, desktop, vehMeta, liveVeh, onBack, onClose, onFocusSto
         <LineBadge line={trip.line} big />
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-[15px] font-bold leading-tight text-text">
-            {loading ? "Wczytywanie…" : direction || "—"}
+            {loading ? "Wczytywanie…" : direction ? displayStopName(direction) : "—"}
           </h2>
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
             {trip.isLive ? (
@@ -142,7 +142,7 @@ function TripView({ trip, desktop, vehMeta, liveVeh, onBack, onClose, onFocusSto
             {loopStops.length > 0 && (
               <span
                 className="inline-flex items-center gap-1 rounded-full bg-primary-dim px-2 py-0.5 font-semibold text-primary"
-                title={`Kurs realizowany przez pętlę: ${loopStops.join(", ")}`}
+                title={`Kurs realizowany przez pętlę: ${loopStops.map(displayStopName).join(", ")}`}
               >
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                   <path d="M17 3l4 4-4 4" />
@@ -150,7 +150,7 @@ function TripView({ trip, desktop, vehMeta, liveVeh, onBack, onClose, onFocusSto
                   <path d="M7 21l-4-4 4-4" />
                   <path d="M3 17h13" />
                 </svg>
-                przez {loopStops.join(", ")}
+                przez {loopStops.map(displayStopName).join(", ")}
               </span>
             )}
             {trip.status === "routing" && (
@@ -265,7 +265,7 @@ function TripView({ trip, desktop, vehMeta, liveVeh, onBack, onClose, onFocusSto
                                 : "font-medium text-text"
                         }`}
                       >
-                        {t.stop_name}
+                        {displayStopName(t.stop_name)}
                       </span>
                       {(t.platform || bigDiff) && (
                         <span className="mt-0.5 block text-[11px] text-text-faint">

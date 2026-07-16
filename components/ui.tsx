@@ -20,20 +20,46 @@ export function IconButton({
   label,
   onClick,
   children,
+  pressed,
 }: {
   label: string;
   onClick: () => void;
   children: React.ReactNode;
+  /** for toggle buttons (adds aria-pressed and keeps the icon colored) */
+  pressed?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
       aria-label={label}
-      className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-text-mute transition-all hover:bg-white/8 hover:text-text active:scale-90"
+      aria-pressed={pressed}
+      className={`grid h-11 w-11 shrink-0 place-items-center rounded-full transition-all hover:bg-white/8 hover:text-text active:scale-90 md:h-9 md:w-9 ${
+        pressed ? "text-primary" : "text-text-mute"
+      }`}
     >
       {children}
     </button>
+  );
+}
+
+/** Favorite star — filled when active. */
+export function StarIcon({ filled = false }: { filled?: boolean }) {
+  return (
+    <svg
+      width="17"
+      height="17"
+      viewBox="0 0 24 24"
+      fill={filled ? "currentColor" : "none"}
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      className={filled ? "animate-pop" : undefined}
+    >
+      <path d="M12 2.5l2.94 5.96 6.58.96-4.76 4.64 1.12 6.55L12 17.52l-5.88 3.09 1.12-6.55L2.48 9.42l6.58-.96L12 2.5z" />
+    </svg>
   );
 }
 

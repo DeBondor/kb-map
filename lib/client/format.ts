@@ -100,6 +100,30 @@ export function countdown(secs: number | null, now: number): string {
   return hhmmFromSecs(secs);
 }
 
+/**
+ * Upstream stop names arrive ALL-CAPS ("BIELSKO-BIAŁA D.A.") — render them in
+ * title case ("Bielsko-Biała D.A."). Display-only: search/matching runs on the
+ * raw names. Kept uppercase: dotted abbreviations (D.A. — single letters),
+ * vowelless acronyms (ZML, PKP) and roman numerals (II, IV).
+ */
+export function displayStopName(raw: string): string {
+  if (!raw) return raw;
+  return raw.toLocaleLowerCase("pl-PL").replace(/\p{L}+/gu, (w) => {
+    if (w.length === 1) return w.toLocaleUpperCase("pl-PL"); // "d.a." → "D.A."
+    if (!/[aeiouyąęó]/.test(w)) return w.toLocaleUpperCase("pl-PL"); // ZML, PKP
+    if (w.length <= 4 && /^[ixv]+$/.test(w)) return w.toLocaleUpperCase("pl-PL"); // II, IV
+    return w.charAt(0).toLocaleUpperCase("pl-PL") + w.slice(1);
+  });
+}
+
+/** Polish plural of "wóz": 1 wóz, 2–4 wozy, 5+ wozów (22 wozy, 12 wozów…). */
+export function wozPlural(n: number): string {
+  if (n === 1) return "wóz";
+  const d = n % 10;
+  const h = n % 100;
+  return d >= 2 && d <= 4 && (h < 12 || h > 14) ? "wozy" : "wozów";
+}
+
 /** Diacritics-insensitive lowercase (handles Polish ł which NFD misses). */
 export function normalizeText(s: string): string {
   return s

@@ -177,11 +177,19 @@ export default function BottomSheet({ onClose, desktop, ariaLabel, initialSnap =
         className="surface absolute bottom-3 left-3 top-[116px] z-[1001] flex w-[400px] flex-col overflow-hidden rounded-3xl outline-none animate-rise xl:top-3"
       >
         <div className="shrink-0">{header}</div>
-        {children}
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          {/* scroll-edge: content fades under the header instead of hitting a hard line */}
+          <div
+            className="pointer-events-none absolute inset-x-0 top-0 z-10 h-3 bg-gradient-to-b from-surface to-transparent"
+            aria-hidden
+          />
+          {children}
+        </div>
       </section>
     );
   }
 
+  const dragging = dragY != null;
   const y = dragY ?? baseY(snap);
   return (
     <section
@@ -189,11 +197,16 @@ export default function BottomSheet({ onClose, desktop, ariaLabel, initialSnap =
       tabIndex={-1}
       role="dialog"
       aria-label={ariaLabel}
-      className="surface absolute inset-x-0 bottom-0 z-[1001] flex flex-col overflow-hidden rounded-t-[28px] outline-none"
+      className={`surface absolute inset-x-0 bottom-0 z-[1001] flex flex-col overflow-hidden rounded-t-[28px] outline-none ${
+        dragging ? "select-none" : ""
+      }`}
       style={{
         height: `${FULL * 100}dvh`,
         transform: entered ? `translateY(${y}px)` : "translateY(100%)",
-        transition: dragY != null ? "none" : "transform 0.42s var(--ease-spring)",
+        transition: dragging ? "none" : "transform 0.42s var(--ease-spring)",
+        // promote to its own layer only while the finger drives it — a
+        // permanent will-change wastes compositor memory
+        willChange: dragging ? "transform" : undefined,
         boxShadow: "var(--shadow-sheet)",
         // standalone PWA / notched phones: keep content above the home indicator
         paddingBottom: "env(safe-area-inset-bottom, 0px)",
@@ -210,7 +223,12 @@ export default function BottomSheet({ onClose, desktop, ariaLabel, initialSnap =
         <div className="mx-auto mt-2.5 h-1 w-9 rounded-full bg-white/25" aria-hidden />
         {header}
       </div>
-      <div className="min-h-0 flex-1" style={{ touchAction: "pan-y" }}>
+      <div className="relative min-h-0 flex-1" style={{ touchAction: "pan-y" }}>
+        {/* scroll-edge: content fades under the header instead of hitting a hard line */}
+        <div
+          className="pointer-events-none absolute inset-x-0 top-0 z-10 h-3 bg-gradient-to-b from-surface to-transparent"
+          aria-hidden
+        />
         {children}
       </div>
     </section>

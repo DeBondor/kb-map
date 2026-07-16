@@ -42,9 +42,9 @@ function LocateButton({ status, onLocate }: Props) {
               ? "Wyłącz lokalizację"
               : "Moja lokalizacja"
       }
-      className={`surface absolute bottom-[calc(1.5rem+env(safe-area-inset-bottom,0px))] right-3 z-[1000] grid h-11 w-11 place-items-center rounded-full transition-colors md:bottom-[96px] ${
+      className={`surface no-focus-ring absolute bottom-[calc(1.5rem+env(safe-area-inset-bottom,0px))] right-3 z-[1000] grid h-11 w-11 place-items-center rounded-full transition-all active:scale-90 md:bottom-[102px] ${
         active
-          ? "text-primary"
+          ? "!bg-primary-dim text-primary"
           : denied || error
             ? "text-danger hover:text-danger"
             : "text-text-mute hover:text-text"

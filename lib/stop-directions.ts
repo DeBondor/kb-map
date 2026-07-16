@@ -14,6 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import * as config from "./config";
+import { col, parseCsvLine, splitLines } from "./gtfs-csv";
 
 /** Initial great-circle bearing p1→p2 in degrees [0,360), or null if identical. */
 function bearing(lat1: number, lon1: number, lat2: number, lon2: number): number | null {
@@ -31,37 +32,6 @@ function bearing(lat1: number, lon1: number, lat2: number, lon2: number): number
 function angleDiff(a: number, b: number): number {
   const d = Math.abs(a - b) % 360;
   return d > 180 ? 360 - d : d;
-}
-
-/** Minimal RFC-4180 line parser (handles quoted fields with embedded commas). */
-function parseCsvLine(line: string): string[] {
-  const out: string[] = [];
-  let cur = "";
-  let quoted = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (quoted) {
-      if (c === '"') {
-        if (line[i + 1] === '"') { cur += '"'; i++; }
-        else quoted = false;
-      } else cur += c;
-    } else if (c === '"') quoted = true;
-    else if (c === ",") { out.push(cur); cur = ""; }
-    else cur += c;
-  }
-  out.push(cur);
-  return out;
-}
-
-/** Column index by header name, or -1. */
-function col(header: string[], name: string): number {
-  return header.indexOf(name);
-}
-
-/** Split on CR, LF or CRLF so a trailing '\r' never sticks to the last column
- *  (the built GTFS files are CRLF). */
-function splitLines(text: string): string[] {
-  return text.split(/\r\n|\r|\n/);
 }
 
 /**

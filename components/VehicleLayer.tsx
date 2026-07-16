@@ -2,7 +2,7 @@
 
 import { memo, useMemo } from "react";
 import { Marker, Tooltip } from "react-leaflet";
-import { delayTxt, vehColor } from "@/lib/client/format";
+import { delayTxt, displayStopName, vehColor } from "@/lib/client/format";
 import { makeVehicleIcon } from "@/lib/client/leafletIcons";
 import type { Vehicle } from "@/lib/client/types";
 
@@ -12,6 +12,8 @@ interface Props {
   /** hide every live marker (e.g. while a trip route is drawn) so the selected
    *  vehicle isn't duplicated by TripLayer and the others don't obscure it */
   hidden?: boolean;
+  /** when set, only vehicles of these lines are drawn */
+  lineFilter?: ReadonlySet<string> | null;
 }
 
 /** Bearing quantized to 5° so setIcon (which replaces the DOM node and kills
@@ -40,18 +42,19 @@ const VehicleMarker = memo(function VehicleMarker({
       keyboard={false}
     >
       <Tooltip direction="top" offset={[0, -16]} className="kb-tooltip">
-        <b>{v.line || "?"}</b> {v.headsign ? `→ ${v.headsign}` : ""}
+        <b>{v.line || "?"}</b> {v.headsign ? `→ ${displayStopName(v.headsign)}` : ""}
         {v.delay != null ? ` · ${delayTxt(v.delay)}` : ""}
       </Tooltip>
     </Marker>
   );
 });
 
-function VehicleLayer({ vehicles, onVehicleClick, hidden = false }: Props) {
+function VehicleLayer({ vehicles, onVehicleClick, hidden = false, lineFilter = null }: Props) {
   if (hidden) return null;
+  const shown = lineFilter ? vehicles.filter((v) => lineFilter.has(v.line)) : vehicles;
   return (
     <>
-      {vehicles.map((v) => (
+      {shown.map((v) => (
         <VehicleMarker key={v.id} v={v} onClick={onVehicleClick} />
       ))}
     </>

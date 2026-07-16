@@ -3,9 +3,10 @@
 import { memo, useEffect, useRef, useState } from "react";
 import BottomSheet from "@/components/BottomSheet";
 import { useNow } from "@/components/hooks";
-import { CloseIcon, EmptyState, ErrorState, IconButton, LineBadge, SkeletonRows } from "@/components/ui";
+import { CloseIcon, EmptyState, ErrorState, IconButton, LineBadge, SkeletonRows, StarIcon } from "@/components/ui";
 import { fetchJSON, getTrip } from "@/lib/client/api";
-import { countdown, delayClass, delayTxt, hhmmFromSecs, secsFromHHMM, todayISO } from "@/lib/client/format";
+import { useFavorites } from "@/lib/client/favorites";
+import { countdown, delayClass, delayTxt, displayStopName, hhmmFromSecs, secsFromHHMM, todayISO } from "@/lib/client/format";
 import type {
   DepartureRow,
   DeparturesResponse,
@@ -50,6 +51,9 @@ function StopView({ stop, desktop, onClose, onShowLive, onShowStatic }: Props) {
   const [ttErr, setTtErr] = useState(false);
   const [ttPhase, setTtPhase] = useState<"timetable" | "trips" | null>(null);
   const now = useNow();
+  /* module-level store — the palette's favorites section updates live too */
+  const { isFav, toggle } = useFavorites();
+  const fav = isFav(stop.designator);
 
   /* live departures — fetch on open / manual retry + 30 s auto refresh
      (the component is keyed by stop.designator in MapApp, so state resets per stop) */
@@ -130,11 +134,18 @@ function StopView({ stop, desktop, onClose, onShowLive, onShowStatic }: Props) {
     <header className="px-4 pb-3 pt-2 md:pt-4">
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
-          <h2 className="truncate text-[16px] font-bold leading-tight text-text">{stop.name}</h2>
+          <h2 className="truncate text-[16px] font-bold leading-tight text-text">{displayStopName(stop.name)}</h2>
           <p className="mt-1 text-[11px] text-text-faint">
             przystanek · <span className="tabular-nums">{stop.designator}</span>
           </p>
         </div>
+        <IconButton
+          label={fav ? "Usuń z ulubionych" : "Dodaj do ulubionych"}
+          onClick={() => toggle(stop.designator)}
+          pressed={fav}
+        >
+          <StarIcon filled={fav} />
+        </IconButton>
         <IconButton label="Zamknij panel przystanku" onClick={onClose}>
           <CloseIcon />
         </IconButton>
@@ -218,7 +229,7 @@ function StopView({ stop, desktop, onClose, onShowLive, onShowStatic }: Props) {
                       <LineBadge line={line} />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-[13px] font-medium text-text">
-                          {row.direction || `Linia ${line}`}
+                          {row.direction ? displayStopName(row.direction) : `Linia ${line}`}
                         </p>
                         {sub && (
                           <p className="mt-0.5 text-[11px] tabular-nums text-text-faint">{sub}</p>
@@ -268,7 +279,7 @@ function StopView({ stop, desktop, onClose, onShowLive, onShowStatic }: Props) {
                 >
                   <LineBadge line={line} />
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-[13px] font-medium text-text">{dir || `Linia ${line}`}</p>
+                    <p className="truncate text-[13px] font-medium text-text">{dir ? displayStopName(dir) : `Linia ${line}`}</p>
                     {dp.platform && (
                       <p className="mt-0.5 text-[11px] text-text-faint">peron {dp.platform}</p>
                     )}
