@@ -11,7 +11,17 @@ interface SingletonState {
   poller: LivePoller;
   startPromise: Promise<void> | null;
   signalsRegistered: boolean;
+  /** Epoch ms of the last failed start — gates the retry cooldown. */
+  lastStartFailAt: number;
 }
+
+/** After a failed start, don't re-attempt loadStops() for this long. Without it
+ *  every incoming request (5 s SWR poll, 30 s healthcheck) would immediately
+ *  kick off another multi-fetch start attempt against a down upstream — and
+ *  block for the attempt's full duration (up to ~77 s of timeouts) before its
+ *  502. With the cooldown those requests fail fast and the upstream gets one
+ *  attempt per window instead of a sustained hammer. */
+const START_RETRY_COOLDOWN_MS = 30_000;
 
 const KEY = Symbol.for("kb-gtfs.poller-singleton");
 
@@ -26,6 +36,7 @@ function state(): SingletonState {
       poller: new LivePoller(api),
       startPromise: null,
       signalsRegistered: false,
+      lastStartFailAt: 0,
     };
   }
   return g[KEY];
@@ -54,12 +65,16 @@ export function getPoller(): LivePoller {
 export function startPoller(): Promise<void> {
   const st = state();
   if (!st.startPromise) {
+    if (Date.now() - st.lastStartFailAt < START_RETRY_COOLDOWN_MS) {
+      return Promise.reject(new Error("poller start failed recently, retry pending"));
+    }
     st.startPromise = st.poller
       .start()
       .then(() => {
         log.info("rt", `server up, ${st.poller.stops.length} stops loaded`);
       })
       .catch((err: unknown) => {
+        st.lastStartFailAt = Date.now();
         st.startPromise = null;
         throw err;
       });

@@ -86,8 +86,19 @@ function StopView({ stop, desktop, onClose, onShowLive, onShowStatic }: Props) {
 
   useEffect(() => {
     if (tab !== "live") return;
-    const id = setInterval(() => setLiveTick((t) => t + 1), 30000);
-    return () => clearInterval(id);
+    /* hidden tab: skip the 30 s refetch (no one is looking); catch up with one
+       immediate refresh the moment the tab becomes visible again */
+    const id = setInterval(() => {
+      if (!document.hidden) setLiveTick((t) => t + 1);
+    }, 30000);
+    const onVisible = () => {
+      if (!document.hidden) setLiveTick((t) => t + 1);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [tab, stop.designator]);
 
   /* today's timetable + per-trip line/direction (client-cached, deduped) */

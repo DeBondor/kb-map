@@ -16,9 +16,9 @@ export type BasemapStatus = "loading" | "ready" | "failed";
 
 /** the slice of maplibregl.Map we touch — keeps maplibre types out of the bundle */
 type GlMap = {
-  once(type: "idle", fn: () => void): unknown;
+  once(type: "idle" | "styledata", fn: () => void): unknown;
   on(type: "error", fn: () => void): unknown;
-  off(type: "idle" | "error", fn: () => void): unknown;
+  off(type: "idle" | "error" | "styledata", fn: () => void): unknown;
   isStyleLoaded(): boolean;
   areTilesLoaded(): boolean;
   resize(): unknown;
@@ -101,8 +101,19 @@ export default function VectorBaseLayer({
       if (gl.isStyleLoaded() && gl.areTilesLoaded()) settle("ready");
       else gl.once("idle", onIdle); // idle fired too early — wait for the next one
     };
+    /* isStyleLoaded() stays false while ANY tile/sprite is still pending, so a
+       transient tile error during warm-up would read as "style never loaded"
+       and needlessly drop the session to the raster fallback. `styledata` fires
+       as soon as the style JSON itself arrives — only errors before that mean
+       the style is truly unreachable; later ones are tile noise for the 12 s
+       timeout to arbitrate. */
+    let styleArrived = false;
+    const onStyleData = () => {
+      styleArrived = true;
+    };
+    gl.once("styledata", onStyleData);
     const onErr = () => {
-      if (!gl.isStyleLoaded()) settle("failed");
+      if (!styleArrived) settle("failed");
     };
     const timer = window.setTimeout(
       () => settle(gl.isStyleLoaded() ? "ready" : "failed"),
@@ -122,6 +133,7 @@ export default function VectorBaseLayer({
       window.clearTimeout(timer);
       gl.off("idle", onIdle);
       gl.off("error", onErr);
+      gl.off("styledata", onStyleData);
       map.removeLayer(layer);
     };
   }, [map, style, filter, onStatus]);

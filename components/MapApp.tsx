@@ -97,6 +97,10 @@ export default function MapApp() {
   const [lineFilter, setLineFilter] = useState<ReadonlySet<string> | null>(null);
   const genRef = useRef(0);
   const lastReqRef = useRef<LastRequest | null>(null);
+  /* in-flight /api/trip_execution fetch — aborted when a newer trip open (or a
+     close) supersedes it, so rapid re-taps don't stack pending requests; the
+     gen check still guards state, this just stops the wasted network work */
+  const tripExecAbortRef = useRef<AbortController | null>(null);
   /* mirror of the 5 s poll so callbacks can read vehicles without depending
      on them (dependency would rebuild the callback + re-render children) */
   const vehiclesRef = useRef<Vehicle[]>([]);
@@ -146,6 +150,8 @@ export default function MapApp() {
 
   const closeTrip = useCallback(() => {
     genRef.current++;
+    tripExecAbortRef.current?.abort();
+    tripExecAbortRef.current = null;
     setTrip(null);
     setVehMeta(null);
   }, []);
@@ -257,10 +263,13 @@ export default function MapApp() {
       lastReqRef.current = { kind: "live", execId, tripId, stop };
       const gen = ++genRef.current;
       setTrip(loadingTrip(gen, true, stop, null, execId));
+      tripExecAbortRef.current?.abort();
+      const ac = new AbortController();
+      tripExecAbortRef.current = ac;
       try {
         const resp = await fetchJSON<TripExecutionResponse>(
           `/api/trip_execution?exec_id=${encodeURIComponent(execId)}`,
-          { cache: "no-store" },
+          { cache: "no-store", signal: ac.signal },
         );
         if (gen !== genRef.current) return;
         if (!resp || !resp.trip) {
