@@ -110,6 +110,20 @@ export interface TripExecutionResponse {
   vehicle_trip_index?: number;
 }
 
+/** One upstream service announcement (utrudnienia/objazdy). Despite the field
+ *  name the content is plain text with \n breaks, not markdown. */
+export interface Announcement {
+  id: number;
+  rev: number;
+  content_markdown: string;
+}
+
+export interface AnnouncementsResponse {
+  announcements?: Announcement[];
+  /** changes whenever the announcement set changes — drives unread tracking */
+  hash?: string;
+}
+
 export type LatLng = [number, number];
 
 /** Resolved trip stop: schedule entry + matched physical stop. */

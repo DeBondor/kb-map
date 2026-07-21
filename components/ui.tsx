@@ -1,5 +1,6 @@
 "use client";
 
+import { useCallback, useState } from "react";
 import { hslColor } from "@/lib/client/format";
 
 /** Colored line-number pill, size-adjustable. */
@@ -60,6 +61,55 @@ export function StarIcon({ filled = false }: { filled?: boolean }) {
     >
       <path d="M12 2.5l2.94 5.96 6.58.96-4.76 4.64 1.12 6.55L12 17.52l-5.88 3.09 1.12-6.55L2.48 9.42l6.58-.96L12 2.5z" />
     </svg>
+  );
+}
+
+function ShareIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <circle cx="18" cy="5" r="3" />
+      <circle cx="6" cy="12" r="3" />
+      <circle cx="18" cy="19" r="3" />
+      <path d="m8.6 13.5 6.8 3.98M15.4 6.5 8.6 10.5" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M20 6 9 17l-5-5" />
+    </svg>
+  );
+}
+
+/** Shares the CURRENT url (deep-link state keeps it fresh) via the native share
+ *  sheet, falling back to clipboard + a 2 s "copied" check. Self-contained on
+ *  purpose: no new props on the memo()-ized sheets. */
+export function ShareButton({ title }: { title: string }) {
+  const [copied, setCopied] = useState(false);
+  const onShare = useCallback(async () => {
+    const url = window.location.href;
+    if (navigator.share) {
+      try {
+        await navigator.share({ title, url });
+      } catch {
+        /* user cancelled the share sheet */
+      }
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* clipboard blocked — nothing sensible to do */
+    }
+  }, [title]);
+  return (
+    <IconButton label={copied ? "Skopiowano link" : "Udostępnij"} onClick={() => void onShare()} pressed={copied}>
+      {copied ? <CheckIcon /> : <ShareIcon />}
+    </IconButton>
   );
 }
 

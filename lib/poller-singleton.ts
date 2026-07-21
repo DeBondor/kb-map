@@ -2,6 +2,7 @@
  * Process-wide singleton KbApi + LivePoller, cached on globalThis so it
  * survives Next.js dev-mode HMR module reloads.
  */
+import { startGtfsRefresh } from "./gtfs-refresh";
 import { KbApi } from "./kb-api";
 import { log } from "./logger";
 import { LivePoller } from "./poller";
@@ -72,6 +73,9 @@ export function startPoller(): Promise<void> {
       .start()
       .then(() => {
         log.info("rt", `server up, ${st.poller.stops.length} stops loaded`);
+        // single call site covers both the instrumentation path and every
+        // route's lazy-start fallback; idempotent + HMR-safe internally
+        startGtfsRefresh();
       })
       .catch((err: unknown) => {
         st.lastStartFailAt = Date.now();

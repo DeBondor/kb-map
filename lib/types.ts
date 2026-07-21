@@ -116,13 +116,26 @@ export interface StopsResponse {
   stops: Array<{ id: string; designator: string; name: string; lat: number; lon: number; dirs?: number[] }>;
 }
 
-/** GET /api/health response. */
+/** GET /api/health response. "degraded" (served as HTTP 503) = the scan loop
+ *  stalled or upstream contact went stale — never keyed on the vehicle count
+ *  (0 vehicles overnight is normal). */
 export interface HealthResponse {
-  status: "ok";
+  status: "ok" | "degraded";
   stops: number;
   scan_count: number;
   last_scan: number;
+  /** live vehicle count (frozen ghosts excluded) */
   vehicles: number;
+  /** internally tracked vehicles, including deliberately hidden ghosts */
+  tracked: number;
+  last_refresh: number;
+  /** epoch secs of the last proven upstream contact */
+  last_good_refresh: number;
+  feed_age_secs: number;
+  loop_restarts: number;
+  last_loop_error: string | null;
+  /** epoch secs of the last successful stop-list load */
+  stops_loaded_at: number;
 }
 
 /** One row of an upstream departures board (loosely typed). */

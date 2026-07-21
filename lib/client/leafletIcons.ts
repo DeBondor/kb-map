@@ -17,6 +17,13 @@ function escapeHtml(s: string): string {
 /** Navigation arrow, points up (north) at 0°; CSS rotate matches compass bearing. */
 const ARROW_PATH = "M12 5 18 19 12 16 6 19Z";
 
+/** Heading quantized to 5° so the vehicle icon (and its DOM node) is only
+ *  rebuilt on a real heading change — replacing it via setIcon kills the CSS
+ *  position glide between fixes and makes the marker teleport. */
+export function bearingBucket(b: number | null | undefined): number | null {
+  return b == null ? null : Math.round(b / 5) * 5;
+}
+
 export function makeVehicleIcon(line: string, color: string, bearing: number | null): L.DivIcon {
   const hasHeading = bearing != null;
   const arrow = hasHeading

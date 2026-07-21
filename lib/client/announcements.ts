@@ -1,0 +1,146 @@
+"use client";
+
+/**
+ * Service announcements ("Utrudnienia") — a module-level store modeled on
+ * lib/client/favorites.ts, so the TopBar badge and the sheet stay in sync
+ * without threading props through MapApp and without touching the 5 s vehicle
+ * poll cycle. Fetches at most once per 15 min while the tab is visible.
+ * Unread state = upstream's set `hash` vs the last seen hash in localStorage.
+ */
+import { useSyncExternalStore } from "react";
+
+import { fetchJSON } from "./api";
+import type { Announcement, AnnouncementsResponse } from "./types";
+
+const SEEN_KEY = "kb:annSeen";
+const REFRESH_MS = 15 * 60_000;
+const STALE_ON_OPEN_MS = 5 * 60_000;
+const EMPTY: readonly Announcement[] = [];
+
+export type AnnouncementsStatus = "idle" | "loading" | "ready" | "error";
+
+export interface AnnouncementsSnapshot {
+  status: AnnouncementsStatus;
+  items: readonly Announcement[];
+  /** upstream set hash; null until the first successful fetch */
+  hash: string | null;
+  /** last hash the user has opened the sheet on */
+  seenHash: string | null;
+}
+
+const INITIAL: AnnouncementsSnapshot = { status: "idle", items: EMPTY, hash: null, seenHash: null };
+
+let snapshot: AnnouncementsSnapshot = INITIAL;
+const subs = new Set<() => void>();
+let timer: ReturnType<typeof setInterval> | null = null;
+let ctl: AbortController | null = null;
+let lastFetchAt = 0;
+
+function loadSeen(): string | null {
+  try {
+    return window.localStorage.getItem(SEEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/* snapshot keeps a stable reference between changes (useSyncExternalStore
+   contract) — replaced only here */
+function emit(next: Partial<AnnouncementsSnapshot>): void {
+  snapshot = { ...snapshot, ...next };
+  subs.forEach((f) => f());
+}
+
+/** Fetch now, aborting any in-flight request (the lib/client/api pattern). */
+export async function refreshAnnouncements(): Promise<void> {
+  ctl?.abort();
+  const ac = new AbortController();
+  ctl = ac;
+  lastFetchAt = Date.now();
+  if (snapshot.status !== "ready") emit({ status: "loading" });
+  try {
+    const resp = await fetchJSON<AnnouncementsResponse>("/api/announcements", {
+      cache: "no-store",
+      signal: ac.signal,
+    });
+    if (ac.signal.aborted) return;
+    // {} from the route = upstream had nothing (pyTruthy-false) — an empty
+    // list, not an error. Upstream text carries stray U+FEFF chars — strip.
+    const items = (Array.isArray(resp.announcements) ? resp.announcements : [])
+      .filter((a): a is Announcement => !!a && typeof a.content_markdown === "string")
+      .map((a) => ({ ...a, content_markdown: a.content_markdown.replace(/\uFEFF/g, "").trim() }))
+      .filter((a) => a.content_markdown.length > 0);
+    emit({ status: "ready", items, hash: typeof resp.hash === "string" ? resp.hash : null });
+  } catch {
+    if (ac.signal.aborted) return;
+    emit({ status: "error" });
+  }
+}
+
+/** Refresh only when the data is older than the sheet-open staleness window. */
+export function refreshAnnouncementsIfStale(): void {
+  if (Date.now() - lastFetchAt >= STALE_ON_OPEN_MS) void refreshAnnouncements();
+}
+
+/** Record the current set as seen (clears the TopBar dot, persists cross-tab). */
+export function markAnnouncementsSeen(): void {
+  if (snapshot.hash === null || snapshot.hash === snapshot.seenHash) return;
+  try {
+    window.localStorage.setItem(SEEN_KEY, snapshot.hash);
+  } catch {
+    /* private mode — keep the in-memory state */
+  }
+  emit({ seenHash: snapshot.hash });
+}
+
+function tick(): void {
+  if (document.hidden) return;
+  if (Date.now() - lastFetchAt < REFRESH_MS) return;
+  void refreshAnnouncements();
+}
+
+/* cross-tab: another tab opened the sheet → its markSeen clears our dot too */
+function onStorage(e: StorageEvent): void {
+  if (e.key === SEEN_KEY || e.key === null) emit({ seenHash: loadSeen() });
+}
+
+function subscribe(fn: () => void): () => void {
+  subs.add(fn);
+  if (subs.size === 1) {
+    snapshot = { ...snapshot, seenHash: loadSeen() };
+    window.addEventListener("storage", onStorage);
+    // catch-up when the tab returns after being hidden through a refresh window
+    document.addEventListener("visibilitychange", tick);
+    timer = setInterval(tick, 60_000);
+    if (snapshot.status === "idle") void refreshAnnouncements();
+  }
+  return () => {
+    subs.delete(fn);
+    if (subs.size === 0) {
+      window.removeEventListener("storage", onStorage);
+      document.removeEventListener("visibilitychange", tick);
+      if (timer) clearInterval(timer);
+      timer = null;
+    }
+  };
+}
+
+export function useAnnouncements(): {
+  status: AnnouncementsStatus;
+  items: readonly Announcement[];
+  unseen: boolean;
+  refresh: () => void;
+  markSeen: () => void;
+} {
+  const snap = useSyncExternalStore(subscribe, () => snapshot, () => INITIAL);
+  const unseen =
+    snap.status === "ready" && snap.items.length > 0 && snap.hash !== null && snap.hash !== snap.seenHash;
+  // module-level functions → stable identities, memo()-safe without useCallback
+  return {
+    status: snap.status,
+    items: snap.items,
+    unseen,
+    refresh: () => void refreshAnnouncements(),
+    markSeen: markAnnouncementsSeen,
+  };
+}

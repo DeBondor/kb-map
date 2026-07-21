@@ -14,8 +14,12 @@
 const CACHE = "kb-shell-v1";
 const SHELL = "/";
 
-self.addEventListener("install", () => {
-  self.skipWaiting();
+/* No skipWaiting on install: a new SW waits until the page approves it via the
+ * SKIP_WAITING message (PwaRegister's update toast). Auto-activating would swap
+ * hashed /_next chunks under a running SPA and break lazy chunk loads. A first
+ * install has nothing to wait behind, so first visits are unaffected. */
+self.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "SKIP_WAITING") self.skipWaiting();
 });
 
 self.addEventListener("activate", (event) => {

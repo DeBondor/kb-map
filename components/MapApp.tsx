@@ -5,7 +5,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AttributionControl, Circle, MapContainer, Marker, TileLayer, ZoomControl, useMap } from "react-leaflet";
 import L from "leaflet";
 import { fetchJSON, fetchRoute, getTrip } from "@/lib/client/api";
+import { tripTimeMatchesStop } from "@/lib/client/format";
 import { makeStopPingIcon, makeUserLocationIcon } from "@/lib/client/leafletIcons";
+import { panMotion } from "@/lib/client/motion";
+import { buildSearch, parseUrlState, type UrlState } from "@/lib/client/urlState";
 import type {
   LatLng,
   Stop,
@@ -16,7 +19,9 @@ import type {
   Vehicle,
 } from "@/lib/client/types";
 import { useGeolocation, useIsDesktop, useStops, useVehicles } from "@/components/hooks";
+import AnnouncementsSheet from "@/components/AnnouncementsSheet";
 import CommandPalette from "@/components/CommandPalette";
+import Toast from "@/components/Toast";
 import LineFilterChip from "@/components/LineFilterChip";
 import LocateButton from "@/components/LocateButton";
 import TopBar, { BASE_LAYERS, RASTER_FALLBACK, type BaseLayerId } from "@/components/TopBar";
@@ -93,10 +98,18 @@ export default function MapApp() {
     attempt: 0,
   });
   const [paletteOpen, setPaletteOpen] = useState(false);
-  /* line names shown on the map; null = no filter (all vehicles) */
-  const [lineFilter, setLineFilter] = useState<ReadonlySet<string> | null>(null);
+  const [annOpen, setAnnOpen] = useState(false);
+  /* deep link parsed exactly once, before any state settles (ssr:false — window
+     is safe in the lazy initializer) */
+  const [initialUrl] = useState<UrlState>(() => parseUrlState(window.location.search));
+  /* line names shown on the map; null = no filter (all vehicles) — seeded from
+     the ?lines= deep link */
+  const [lineFilter, setLineFilter] = useState<ReadonlySet<string> | null>(() =>
+    initialUrl.lines?.length ? new Set(initialUrl.lines) : null,
+  );
   const genRef = useRef(0);
   const lastReqRef = useRef<LastRequest | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
   /* in-flight /api/trip_execution fetch — aborted when a newer trip open (or a
      close) supersedes it, so rapid re-taps don't stack pending requests; the
      gen check still guards state, this just stops the wasted network work */
@@ -148,6 +161,14 @@ export default function MapApp() {
     stopsMapsRef.current = stopsMaps;
   }, [stopsMaps]);
 
+  const showToast = useCallback((t: string) => setToast(t), []);
+  const closeToast = useCallback(() => setToast(null), []);
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 6000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
   const closeTrip = useCallback(() => {
     genRef.current++;
     tripExecAbortRef.current?.abort();
@@ -178,10 +199,7 @@ export default function MapApp() {
         if (t.designator != null) c = byId.get(String(t.designator));
         if (!c && t.place_id) c = byDesig.get(t.place_id);
         if (!c) continue;
-        const selected =
-          !!stop &&
-          ((t.designator != null && String(t.designator) === String(stop.id)) ||
-            t.place_id === stop.designator);
+        const selected = !!stop && tripTimeMatchesStop(t, stop);
         resolved.push({ t, s: c, selected });
       }
       const pts: LatLng[] = resolved.map(({ s }): LatLng => [s.lat, s.lon]);
@@ -255,7 +273,12 @@ export default function MapApp() {
   );
 
   const openTripLive = useCallback(
-    async (execId: string, tripId: string | number | null, stop: Stop | null) => {
+    async (
+      execId: string,
+      tripId: string | number | null,
+      stop: Stop | null,
+      opts?: { deepLink?: boolean },
+    ) => {
       if (!execId) {
         if (tripId) void openTripStatic(tripId, stop);
         return;
@@ -275,7 +298,13 @@ export default function MapApp() {
         if (!resp || !resp.trip) {
           // upstream 404 → our API returns {} → vehicle has not departed yet
           if (tripId) void openTripStatic(tripId, stop, NOT_STARTED);
-          else
+          else if (opts?.deepLink) {
+            // exec ids are ephemeral: a shared link may outlive the course —
+            // don't strand the user on a misleading "not departed" panel
+            genRef.current++;
+            setTrip(null);
+            showToast("Ten kurs już się zakończył lub jest niedostępny.");
+          } else
             setTrip((prev) =>
               prev && prev.gen === gen ? { ...prev, status: "ready", note: NOT_STARTED } : prev,
             );
@@ -295,7 +324,7 @@ export default function MapApp() {
         setTrip((prev) => (prev && prev.gen === gen ? { ...prev, status: "error" } : prev));
       }
     },
-    [buildTrip, openTripStatic],
+    [buildTrip, openTripStatic, showToast],
   );
 
   const retryTrip = useCallback(() => {
@@ -313,7 +342,7 @@ export default function MapApp() {
       setSelectedStop(s);
       if (opts?.fly && mapRef.current) {
         const m = mapRef.current;
-        m.flyTo([s.lat, s.lon], Math.max(m.getZoom(), 16), { duration: 1.1, easeLinearity: 0.22 });
+        m.flyTo([s.lat, s.lon], Math.max(m.getZoom(), 16), panMotion(1.1));
       }
     },
     [closeTrip],
@@ -326,6 +355,10 @@ export default function MapApp() {
   /* command palette */
   const openPalette = useCallback(() => setPaletteOpen(true), []);
   const closePalette = useCallback(() => setPaletteOpen(false), []);
+
+  /* announcements sheet ("Utrudnienia") */
+  const openAnnouncements = useCallback(() => setAnnOpen(true), []);
+  const closeAnnouncements = useCallback(() => setAnnOpen(false), []);
 
   /* line filter — toggling a line on also frames its live vehicles */
   const toggleLineFilter = useCallback(
@@ -342,7 +375,7 @@ export default function MapApp() {
         if (vs.length) {
           mapRef.current.fitBounds(
             L.latLngBounds(vs.map((v): [number, number] => [v.lat, v.lon])),
-            { padding: [60, 60], maxZoom: 14 },
+            { padding: [60, 60], maxZoom: 14, ...panMotion(0.8) },
           );
         }
       }
@@ -351,6 +384,131 @@ export default function MapApp() {
   );
   const clearLineFilter = useCallback(() => setLineFilter(null), []);
   const filterLines = useMemo(() => (lineFilter ? [...lineFilter] : null), [lineFilter]);
+
+  /* ---- deep links: URL -> state (hydration) and state -> URL (sync) ----
+     Plain History API on purpose, NOT next/navigation: useRouter schedules real
+     App Router work and useSearchParams would subscribe the whole map tree to
+     every URL change — our own debounced moveend replaceState would then
+     re-render everything. Next ≥14.1 supports history.pushState/replaceState
+     as shallow routing; all URL work below runs in effects/listeners over refs,
+     so the 5 s poll cycle never sees any of it. */
+
+  /* stop/trip hydration waits for /api/stops (near-instant, our own API) so the
+     opened trip carries stop context; consumed exactly once and never over a
+     user interaction that beat it */
+  const dlConsumedRef = useRef(false);
+  useEffect(() => {
+    if (dlConsumedRef.current) return;
+    const dl = initialUrl;
+    if (!dl.stop && !dl.exec && !dl.trip) {
+      dlConsumedRef.current = true;
+      return;
+    }
+    if (genRef.current > 0 || selectedStop != null) {
+      dlConsumedRef.current = true;
+      return;
+    }
+    if (stopsMaps.byDesig.size === 0) return;
+    dlConsumedRef.current = true;
+    const s = dl.stop ? stopsMaps.byDesig.get(dl.stop) ?? null : null;
+    // deferred a tick: hydration runs inside an effect and synchronous setState
+    // here would cascade into the same commit
+    const t = setTimeout(() => {
+      if (dl.stop && !s) showToast("Nie znaleziono przystanku z linku.");
+      if (s) {
+        setSelectedStop(s);
+        if (!dl.map) mapRef.current?.setView([s.lat, s.lon], 16, { animate: false });
+      }
+      if (dl.exec) void openTripLive(dl.exec, dl.trip, s, { deepLink: true });
+      else if (dl.trip) void openTripStatic(dl.trip, s);
+    }, 0);
+    return () => clearTimeout(t);
+  }, [initialUrl, stopsMaps, selectedStop, openTripLive, openTripStatic, showToast]);
+
+  /* state -> URL. One writer; refs carry everything the popstate/moveend
+     listeners need so they stay mount-once and render-free. */
+  const urlStateRef = useRef<UrlState>(initialUrl);
+  const urlSyncRef = useRef({ pushed: 0, expectPop: 0, fromPop: false, prevDepth: 0 });
+  const tripOpen = trip != null;
+  const tripExecId = trip?.isLive ? trip.execId : null;
+  const tripIsStatic = tripOpen && !trip.isLive;
+  useEffect(() => {
+    const st = urlSyncRef.current;
+    const depth = tripOpen ? 2 : selectedStop ? 1 : 0;
+    const prev = st.prevDepth;
+    st.prevDepth = depth;
+    const fromPop = st.fromPop;
+    st.fromPop = false;
+    const staticId =
+      tripIsStatic && lastReqRef.current?.kind === "static" ? String(lastReqRef.current.tripId) : null;
+    const m = mapRef.current;
+    const c = m?.getCenter();
+    urlStateRef.current = {
+      stop: selectedStop?.designator ?? null,
+      exec: tripExecId,
+      trip: staticId,
+      lines: filterLines,
+      map: m && c ? { lat: c.lat, lon: c.lng, zoom: m.getZoom() } : urlStateRef.current.map,
+    };
+    const search = buildSearch(urlStateRef.current);
+    if (depth > prev && !fromPop) {
+      // sheet appeared/deepened → its own history entry, so back closes it
+      if (search !== window.location.search) {
+        window.history.pushState({ kb: true }, "", search || window.location.pathname);
+        st.pushed++;
+      }
+    } else if (depth < prev && !fromPop && st.pushed > 0) {
+      // closed from the UI → unwind our entries; the popstate handler consumes
+      // this and repairs the restored URL if it drifted
+      const steps = Math.min(st.pushed, prev - depth);
+      st.pushed -= steps;
+      st.expectPop++;
+      window.history.go(-steps);
+    } else if (search !== window.location.search) {
+      // same-level change (stop→stop, filter, trip kind) → replace in place
+      window.history.replaceState({ kb: true }, "", search || window.location.pathname);
+    }
+  }, [selectedStop, tripOpen, tripExecId, tripIsStatic, filterLines]);
+
+  /* popstate: deliberately close-only — Android/browser back closes sheets;
+     forward into a sheet the state doesn't have just repairs the URL (state is
+     authoritative). Full back/forward re-opening is not worth the surface. */
+  useEffect(() => {
+    const onPop = (): void => {
+      const st = urlSyncRef.current;
+      if (st.expectPop > 0) {
+        st.expectPop--;
+        const want = buildSearch(urlStateRef.current);
+        if (window.location.search !== want) {
+          window.history.replaceState({ kb: true }, "", want || window.location.pathname);
+        }
+        return;
+      }
+      const dl = parseUrlState(window.location.search);
+      const cur = urlStateRef.current;
+      const wantsTrip = !!(dl.exec || dl.trip);
+      const haveTrip = !!(cur.exec || cur.trip);
+      if (!wantsTrip && haveTrip) {
+        st.fromPop = true;
+        st.pushed = Math.max(0, st.pushed - 1);
+        closeTrip();
+        if (!dl.stop) setSelectedStop(null);
+        return;
+      }
+      if (!dl.stop && !wantsTrip && cur.stop) {
+        st.fromPop = true;
+        st.pushed = Math.max(0, st.pushed - 1);
+        setSelectedStop(null);
+        return;
+      }
+      const want = buildSearch(cur);
+      if (window.location.search !== want) {
+        window.history.replaceState({ kb: true }, "", want || window.location.pathname);
+      }
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [closeTrip]);
 
   /* "Wyczyść widok": close every sheet and drop the line filter */
   const handleClearView = useCallback(() => {
@@ -394,7 +552,7 @@ export default function MapApp() {
   /* fly to a stop tapped on the trip timeline (does not change selection) */
   const handleFocusStop = useCallback((s: Stop) => {
     const m = mapRef.current;
-    if (m) m.flyTo([s.lat, s.lon], Math.max(m.getZoom(), 15), { duration: 0.9, easeLinearity: 0.22 });
+    if (m) m.flyTo([s.lat, s.lon], Math.max(m.getZoom(), 15), panMotion(0.9));
   }, []);
 
   const handleMap = useCallback((m: L.Map) => {
@@ -402,12 +560,26 @@ export default function MapApp() {
     // guard against a 0×0 container at mount (dvh reflow on mobile): re-measure
     // once layout settles so the GL canvas isn't sized from an empty box
     requestAnimationFrame(() => m.invalidateSize(false));
+    // keep map= in the URL fresh — debounced replaceState over refs, zero React
+    // renders (Safari throttles ~100 history calls/30 s, hence debounce + skip)
+    let t: ReturnType<typeof setTimeout> | null = null;
+    m.on("moveend", () => {
+      if (t) clearTimeout(t);
+      t = setTimeout(() => {
+        const c = m.getCenter();
+        urlStateRef.current = { ...urlStateRef.current, map: { lat: c.lat, lon: c.lng, zoom: m.getZoom() } };
+        const search = buildSearch(urlStateRef.current);
+        if (search !== window.location.search) {
+          window.history.replaceState({ kb: true }, "", search || window.location.pathname);
+        }
+      }, 500);
+    });
   }, []);
 
   /* locate button: start (or reuse) the GPS watch and recenter on the fix */
   const flyToUser = useCallback((p: { lat: number; lon: number }) => {
     const m = mapRef.current;
-    if (m) m.flyTo([p.lat, p.lon], Math.max(m.getZoom(), 15), { duration: 1.1, easeLinearity: 0.22 });
+    if (m) m.flyTo([p.lat, p.lon], Math.max(m.getZoom(), 15), panMotion(1.1));
   }, []);
 
   const handleLocate = useCallback(() => {
@@ -455,8 +627,8 @@ export default function MapApp() {
   return (
     <div className="relative h-dvh w-full overflow-hidden bg-bg">
       <MapContainer
-        center={[49.822, 19.046]}
-        zoom={11}
+        center={initialUrl.map ? [initialUrl.map.lat, initialUrl.map.lon] : [49.822, 19.046]}
+        zoom={initialUrl.map?.zoom ?? 11}
         maxZoom={19}
         zoomControl={false}
         attributionControl={false}
@@ -538,6 +710,7 @@ export default function MapApp() {
         baseLayer={baseLayer}
         onBaseLayer={setBaseLayer}
         onOpenPalette={openPalette}
+        onOpenAnnouncements={openAnnouncements}
       />
 
       {filterLines && (
@@ -572,8 +745,13 @@ export default function MapApp() {
 
       <LocateButton status={geo.status} onLocate={handleLocate} />
 
-      {/* one sheet at a time: an open trip takes precedence over the stop */}
-      {trip ? (
+      {toast && <Toast text={toast} onClose={closeToast} />}
+
+      {/* one sheet at a time: announcements over trip over stop; closing the
+          announcements returns to whichever sheet was underneath */}
+      {annOpen ? (
+        <AnnouncementsSheet desktop={desktop} onClose={closeAnnouncements} />
+      ) : trip ? (
         <TripPanel
           key={trip.gen}
           trip={trip}

@@ -4,7 +4,8 @@ import { memo, useEffect, useMemo, useState } from "react";
 import { CircleMarker, Marker, Polyline, Tooltip, useMap } from "react-leaflet";
 import L from "leaflet";
 import { displayStopName, hslColor } from "@/lib/client/format";
-import { makeVehicleIcon } from "@/lib/client/leafletIcons";
+import { bearingBucket, makeVehicleIcon } from "@/lib/client/leafletIcons";
+import { prefersReducedMotion } from "@/lib/client/motion";
 import type { LatLng, TripView, Vehicle } from "@/lib/client/types";
 
 interface Props {
@@ -17,12 +18,6 @@ interface Props {
   /** fresh position/heading from the live poll (matched by exec id); drives the
    *  marker so the tracked bus keeps moving while its route is open */
   liveVehicle: Vehicle | null;
-}
-
-/** Heading quantized to 5° so the icon (and its DOM node) is only rebuilt on a
- *  real heading change — keeps the CSS position glide between fixes alive. */
-function bearingBucket(b: number | null | undefined): number | null {
-  return b == null ? null : Math.round(b / 5) * 5;
 }
 
 function TripLayer({ trip, desktop, vehMeta, liveVehicle }: Props) {
@@ -79,8 +74,7 @@ function TripLayer({ trip, desktop, vehMeta, liveVehicle }: Props) {
       : // keep the route clear of the sheet at its opening (peek) snap ≈ 25dvh
         { paddingTopLeft: [24, 80], paddingBottomRight: [24, Math.round(window.innerHeight * 0.3)] };
     // the CSS reduced-motion reset can't reach Leaflet's JS-driven pan — gate it here
-    const reduce =
-      typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    const reduce = prefersReducedMotion();
     // a single point makes zero-size bounds → fitBounds would compute zoom Infinity
     if (pts.length === 1) {
       map.setView(pts[0], 16, { animate: !reduce, duration: reduce ? 0 : 0.9 });

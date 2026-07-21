@@ -3,7 +3,7 @@
 import { memo, useEffect, useRef, useState } from "react";
 import BottomSheet from "@/components/BottomSheet";
 import { useNow } from "@/components/hooks";
-import { CloseIcon, EmptyState, ErrorState, IconButton, LineBadge, SkeletonRows, StarIcon } from "@/components/ui";
+import { CloseIcon, EmptyState, ErrorState, IconButton, LineBadge, ShareButton, SkeletonRows, StarIcon } from "@/components/ui";
 import { fetchJSON, getTrip } from "@/lib/client/api";
 import { useFavorites } from "@/lib/client/favorites";
 import { countdown, delayClass, delayTxt, displayStopName, hhmmFromSecs, secsFromHHMM, todayISO } from "@/lib/client/format";
@@ -150,6 +150,7 @@ function StopView({ stop, desktop, onClose, onShowLive, onShowStatic }: Props) {
             przystanek · <span className="tabular-nums">{stop.designator}</span>
           </p>
         </div>
+        <ShareButton title={`Przystanek ${displayStopName(stop.name)}`} />
         <IconButton
           label={fav ? "Usuń z ulubionych" : "Dodaj do ulubionych"}
           onClick={() => toggle(stop.designator)}

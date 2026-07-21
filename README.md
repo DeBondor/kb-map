@@ -149,8 +149,32 @@ Wzór w `.env.example`. Wszystkie opcjonalne:
 | `KB_CANDIDATE_HORIZON` | `7200` | horyzont odjazdów przy skanie (s) |
 | `KB_404_CACHE` | `240` | cache odpowiedzi 404 dla trip_execution (s) |
 | `KB_BATCH_SIZE` | `6` | rozmiar paczki zapytań przy skanie (upstream ucina odpowiedź do 6 tablic na zapytanie — większe wartości gubią przystanki) |
+| `KB_HEALTH_STALE_SEC` | `1200` | wiek feedu (s od ostatniego potwierdzonego kontaktu z upstreamem), po którym `/api/health` zgłasza `degraded` (HTTP 503) |
+| `KB_STOPS_RELOAD_SEC` | `86400` | jak często poller przeładowuje listę przystanków (s); nieudany reload zachowuje starą listę i ponawia za 30 min |
+| `KB_GTFS_AUTOBUILD` | `1` | automatyczna nocna przebudowa feedu GTFS w procesie serwera (`0` wyłącza) |
+| `KB_GTFS_BUILD_HOUR` | `3` | godzina (czasu Europe/Warsaw), po której feed z wczorajszą datą jest przebudowywany; brak feedu = build od razu (bootstrap) |
+| `KB_GTFS_BUILD_CONCURRENCY` | `10` | równoległość HTTP nocnej przebudowy (mniejsza niż CLI, bo serwer równolegle skanuje) |
 | `PORT` | `8080` | port serwera HTTP |
 
 ### Healthcheck
 
-`GET /api/health` zwraca `{"status":"ok","stops":...,"scan_count":...,"last_scan":...,"vehicles":...}` — z tego korzysta `HEALTHCHECK` w Dockerfile i `compose.yaml`.
+`GET /api/health` zwraca status i liczniki:
+
+```json
+{
+  "status": "ok",
+  "stops": 956,
+  "scan_count": 12,
+  "last_scan": 1753100000,
+  "vehicles": 34,
+  "tracked": 41,
+  "last_refresh": 1753100010,
+  "last_good_refresh": 1753100010,
+  "feed_age_secs": 4,
+  "loop_restarts": 0,
+  "last_loop_error": null,
+  "stops_loaded_at": 1753090000
+}
+```
+
+`status` przechodzi w `degraded` (i odpowiedź w HTTP 503 — co przewraca `HEALTHCHECK` w Dockerfile i `compose.yaml`), gdy pętla skanująca utknęła (brak skanu przez ponad 2×`KB_SCAN_INTERVAL`+120 s) **lub** ostatni potwierdzony kontakt z upstreamem jest starszy niż `KB_HEALTH_STALE_SEC`. Celowo bez warunku na liczbę pojazdów — 0 wozów w nocy to norma. `vehicles` to pojazdy widoczne na mapie; `tracked` obejmuje też celowo ukryte "duchy".

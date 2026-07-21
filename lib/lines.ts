@@ -52,3 +52,8 @@ export function getLines(): LineInfo[] {
   if (!cache) cache = compute();
   return cache;
 }
+
+/** Drop the cache after a GTFS rebuild so the next read sees the new feed. */
+export function invalidateLines(): void {
+  cache = null;
+}

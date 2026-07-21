@@ -3,8 +3,8 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import BottomSheet from "@/components/BottomSheet";
 import { useNow } from "@/components/hooks";
-import { BackIcon, CloseIcon, ErrorState, IconButton, LineBadge } from "@/components/ui";
-import { computeEta, delayClass, delayTxt, detectLoopStops, displayStopName, hhmmFromSecs, hslColor, secsFromHHMM } from "@/lib/client/format";
+import { BackIcon, CloseIcon, ErrorState, IconButton, LineBadge, ShareButton } from "@/components/ui";
+import { computeEta, delayClass, delayTxt, detectLoopStops, displayStopName, hhmmFromSecs, hslColor, secsFromHHMM, tripTimeMatchesStop } from "@/lib/client/format";
 import type { Stop, TripView as TripViewState, Vehicle } from "@/lib/client/types";
 
 interface Props {
@@ -160,6 +160,9 @@ function TripView({ trip, desktop, vehMeta, liveVeh, onBack, onClose, onFocusSto
             )}
           </div>
         </div>
+        {!loading && (
+          <ShareButton title={`Linia ${trip.line}${direction ? ` → ${displayStopName(direction)}` : ""}`} />
+        )}
         <IconButton label="Zamknij trasę" onClick={onClose}>
           <CloseIcon />
         </IconButton>
@@ -196,10 +199,7 @@ function TripView({ trip, desktop, vehMeta, liveVeh, onBack, onClose, onFocusSto
               const est = trip.isLive && diff != null && planned != null;
               const shown = est ? hhmmFromSecs((planned as number) + (diff as number)) : t.departure_time;
               const bigDiff = est && Math.abs(diff as number) > 60;
-              const selected =
-                !!trip.stop &&
-                ((t.designator != null && String(t.designator) === String(trip.stop.id)) ||
-                  t.place_id === trip.stop.designator);
+              const selected = !!trip.stop && tripTimeMatchesStop(t, trip.stop);
               const coord = stopByIndex.get(t.index);
               const first = idx === 0;
               const last = idx === trip.rawTimes.length - 1;

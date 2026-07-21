@@ -69,6 +69,28 @@ export const LIVE_BATCH_SIZE = envInt("KB_BATCH_SIZE", 6);
 export const LIVE_STALE_VEHICLE_SEC = envInt("KB_STALE_VEHICLE_SEC", 300);
 export const LIVE_STALE_MOVE_EPS_M = envInt("KB_STALE_MOVE_EPS_M", 15, 0);
 
+/**
+ * Feed age (secs since the last proven upstream contact) beyond which
+ * /api/health reports "degraded" (HTTP 503). Must exceed
+ * LIVE_STOP_EMPTY_CACHE_SEC (600): overnight a full scan can legitimately find
+ * every stop cached and make zero upstream requests.
+ */
+export const HEALTH_STALE_SEC = envInt("KB_HEALTH_STALE_SEC", 1200);
+
+/** How often the poller re-fetches the stop list (default: daily). A failed
+ *  reload keeps the previous list and retries in 30 min. */
+export const STOPS_RELOAD_SEC = envInt("KB_STOPS_RELOAD_SEC", 86_400);
+
+/** In-process daily GTFS feed rebuild (KB_GTFS_AUTOBUILD=0 disables — e.g. in
+ *  dev when the poller alone should hit upstream). */
+export const GTFS_AUTOBUILD = envStr("KB_GTFS_AUTOBUILD", "1") !== "0";
+/** Agency-local hour after which the daily rebuild may run (no buses ~22:00–4:30,
+ *  and the new date's timetables are certainly published by then). */
+export const GTFS_BUILD_HOUR = envInt("KB_GTFS_BUILD_HOUR", 3, 0);
+/** Upstream concurrency for the in-process rebuild — politer than the CLI's
+ *  default 40 because the server keeps scanning while it builds. */
+export const GTFS_BUILD_CONCURRENCY = envInt("KB_GTFS_BUILD_CONCURRENCY", 10);
+
 export const USER_AGENT = envStr(
   "KB_USER_AGENT",
   "kb-gtfs/1.0 (+https://komunikacjabeskidzka.kiedyprzyjedzie.pl)",

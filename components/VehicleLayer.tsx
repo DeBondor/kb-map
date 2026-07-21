@@ -3,7 +3,7 @@
 import { memo, useMemo } from "react";
 import { Marker, Tooltip } from "react-leaflet";
 import { delayTxt, displayStopName, vehColor } from "@/lib/client/format";
-import { makeVehicleIcon } from "@/lib/client/leafletIcons";
+import { bearingBucket, makeVehicleIcon } from "@/lib/client/leafletIcons";
 import type { Vehicle } from "@/lib/client/types";
 
 interface Props {
@@ -14,12 +14,6 @@ interface Props {
   hidden?: boolean;
   /** when set, only vehicles of these lines are drawn */
   lineFilter?: ReadonlySet<string> | null;
-}
-
-/** Bearing quantized to 5° so setIcon (which replaces the DOM node and kills
- *  the CSS glide) only fires on real heading/color changes. */
-function bearingBucket(b: number | null): number | null {
-  return b == null ? null : Math.round(b / 5) * 5;
 }
 
 const VehicleMarker = memo(function VehicleMarker({

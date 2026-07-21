@@ -13,7 +13,8 @@
   /* ---- text ---- */
   --color-text: #e8eaed;
   --color-text-mute: #9aa0a6;
-  --color-text-faint: #667079;
+  /* WCAG AA on bg/surface/surface-2 (5.65 / 5.22 / 4.62:1) */
+  --color-text-faint: #838d96;
 
   /* ---- brand (Komunikacja Beskidzka) ---- */
   --color-brand: #a6192e;

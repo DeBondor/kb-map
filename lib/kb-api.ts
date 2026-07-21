@@ -29,7 +29,7 @@ export function parseIntStrict(v: unknown): number | null {
 }
 
 /** Python float() for numbers and strings; null for anything else. */
-function pyFloat(v: unknown): number | null {
+export function pyFloat(v: unknown): number | null {
   if (typeof v === "number") return Number.isFinite(v) ? v : null;
   if (typeof v !== "string") return null;
   const t = v.trim();
@@ -51,6 +51,18 @@ export function isRecord(v: unknown): v is UpstreamRecord {
 /** base64 of the raw trip_execution_id (port of b64_exec_id). */
 export function b64ExecId(tripExecutionId: string): string {
   return Buffer.from(tripExecutionId, "utf-8").toString("base64");
+}
+
+/**
+ * Path-segment-safe form of b64ExecId. Standard base64 may contain '/' (a path
+ * separator — would rewrite the upstream URL) and '+'; escape only those two so
+ * every id that worked before is byte-identical on the wire ('=' padding stays
+ * raw), while the HTTP server still percent-decodes back to plain base64 for
+ * the upstream app. (base64url would be cleaner but we can't verify the
+ * upstream decoder accepts its alphabet.)
+ */
+export function execIdPathSegment(tripExecutionId: string): string {
+  return b64ExecId(tripExecutionId).replace(/\+/g, "%2B").replace(/\//g, "%2F");
 }
 
 function sleep(ms: number): Promise<void> {
@@ -127,6 +139,9 @@ export class KbApi {
   private readonly timeoutMs: number;
   private readonly limit: ReturnType<typeof pLimit>;
   private readonly headers: Record<string, string>;
+  /** Last successfully scraped stops revision — a transient scrape failure
+   *  falls back here instead of the hardcoded cold-start default. */
+  private lastGoodRevision: string | null = null;
 
   constructor(opts: { concurrency?: number; timeout?: number } = {}) {
     this.base = config.BASE_URL;
@@ -182,11 +197,14 @@ export class KbApi {
       });
       const html = await resp.text();
       const m = RE_REVISION.exec(html);
-      if (m) return m[1];
+      if (m) {
+        this.lastGoodRevision = m[1];
+        return m[1];
+      }
     } catch {
-      // fall through to default
+      // fall through to the last known / default revision
     }
-    return config.DEFAULT_STOPS_REVISION;
+    return this.lastGoodRevision ?? config.DEFAULT_STOPS_REVISION;
   }
 
   /** Fetch and parse the full stop list for a stops revision. */
@@ -233,7 +251,7 @@ export class KbApi {
 
   /** GET /api/trip_execution/<base64(execId)>/<index> (raw passthrough). */
   async fetchTripExecution(tripExecutionId: string, index = 0): Promise<unknown> {
-    return this.get(`/api/trip_execution/${b64ExecId(tripExecutionId)}/${index}`);
+    return this.get(`/api/trip_execution/${execIdPathSegment(tripExecutionId)}/${index}`);
   }
 
   /**

@@ -1,0 +1,196 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+
+import {
+  BRAND,
+  computeEta,
+  countdown,
+  delayTxt,
+  detectLoopStops,
+  displayStopName,
+  hhmmFromSecs,
+  hslColor,
+  normalizeText,
+  secsFromHHMM,
+  wozPlural,
+} from "../lib/client/format";
+import type { TripTime, TripView } from "../lib/client/types";
+
+describe("secsFromHHMM / hhmmFromSecs", () => {
+  it("parses HH:MM and HH:MM:SS", () => {
+    assert.equal(secsFromHHMM("05:30"), 19800);
+    assert.equal(secsFromHHMM("5:30:45"), 19845);
+    assert.equal(secsFromHHMM(""), null);
+    assert.equal(secsFromHHMM(null), null);
+    assert.equal(secsFromHHMM("ab:cd"), null);
+  });
+
+  it("formats with a %24 wrap for post-midnight seconds", () => {
+    assert.equal(hhmmFromSecs(19800), "05:30");
+    assert.equal(hhmmFromSecs(90000), "01:00"); // 25:00 -> 01:00
+    assert.equal(hhmmFromSecs(0), "00:00");
+    assert.equal(hhmmFromSecs(null), "");
+  });
+});
+
+describe("delayTxt", () => {
+  it("renders ±30 s as mirror images (symmetric rounding)", () => {
+    assert.equal(delayTxt(30), "+1 min");
+    assert.equal(delayTxt(-30), "-1 min");
+    assert.equal(delayTxt(29), "o czasie");
+    assert.equal(delayTxt(-29), "o czasie");
+    assert.equal(delayTxt(0), "o czasie");
+    assert.equal(delayTxt(90), "+2 min");
+    assert.equal(delayTxt(null), "");
+  });
+});
+
+describe("countdown", () => {
+  it("counts down in minutes, 'teraz' at or past due", () => {
+    assert.equal(countdown(null, 0), "");
+    assert.equal(countdown(400, 100), "5 min");
+    assert.equal(countdown(100, 400), "teraz");
+    assert.equal(countdown(100, 100), "teraz");
+  });
+
+  it("falls back to the absolute time beyond an hour", () => {
+    assert.equal(countdown(19800, 19800 - 2 * 3600), "05:30");
+  });
+
+  it("rolls a large negative delta forward across midnight", () => {
+    // departure 00:10 seen at 23:53 is in 17 min, not 24 h ago
+    assert.equal(countdown(600, 86000), "17 min");
+  });
+});
+
+describe("displayStopName", () => {
+  it("title-cases ALL-CAPS names, keeping dotted abbreviations", () => {
+    assert.equal(displayStopName("BIELSKO-BIAŁA D.A."), "Bielsko-Biała D.A.");
+  });
+
+  it("keeps vowelless acronyms and roman numerals uppercase", () => {
+    assert.equal(displayStopName("SZCZYRK ZML"), "Szczyrk ZML");
+    assert.equal(displayStopName("OSIEDLE II"), "Osiedle II");
+  });
+
+  it("passes empty through", () => {
+    assert.equal(displayStopName(""), "");
+  });
+});
+
+describe("wozPlural", () => {
+  it("follows Polish plural rules", () => {
+    assert.equal(wozPlural(1), "wóz");
+    assert.equal(wozPlural(2), "wozy");
+    assert.equal(wozPlural(4), "wozy");
+    assert.equal(wozPlural(5), "wozów");
+    assert.equal(wozPlural(12), "wozów");
+    assert.equal(wozPlural(14), "wozów");
+    assert.equal(wozPlural(22), "wozy");
+    assert.equal(wozPlural(25), "wozów");
+    assert.equal(wozPlural(122), "wozy");
+  });
+});
+
+describe("normalizeText", () => {
+  it("strips Polish diacritics including ł (which NFD misses)", () => {
+    assert.equal(normalizeText("Łódź"), "lodz");
+    assert.equal(normalizeText("Żywiec"), "zywiec");
+    assert.equal(normalizeText("SZCZYRK"), "szczyrk");
+  });
+});
+
+describe("detectLoopStops", () => {
+  const t = (names: string[]) => names.map((stop_name) => ({ stop_name }));
+
+  it("returns [] for short trips and round trips (first == last)", () => {
+    assert.deepEqual(detectLoopStops(t(["A", "B", "C"])), []);
+    assert.deepEqual(detectLoopStops(t(["A", "B", "C", "B", "A"])), []);
+  });
+
+  it("names a small doubled spur", () => {
+    assert.deepEqual(detectLoopStops(t(["A", "B", "S", "B", "C"])), ["B"]);
+  });
+
+  it("rejects long backtracks (>3 doubled stops)", () => {
+    assert.deepEqual(detectLoopStops(t(["A", "B", "C", "D", "E", "D", "C", "B", "E", "F", "G"])), []);
+  });
+});
+
+describe("hslColor", () => {
+  it("is deterministic and falls back to brand red", () => {
+    assert.equal(hslColor("120"), hslColor("120"));
+    assert.match(hslColor("120"), /^hsl\(\d+,58%,46%\)$/);
+    assert.equal(hslColor(null), BRAND);
+    assert.equal(hslColor(""), BRAND);
+  });
+});
+
+describe("computeEta", () => {
+  const stop = { id: "123", designator: "P:9", name: "TESTOWA", lat: 0, lon: 0 };
+  const time = (over: Partial<TripTime>): TripTime => ({
+    stop_name: "TESTOWA",
+    departure_time: "10:00",
+    index: 0,
+    ...over,
+  });
+  const view = (over: Partial<TripView>): TripView => ({
+    gen: 1,
+    isLive: true,
+    status: "ready",
+    note: null,
+    line: "120",
+    direction: "SZCZYRK",
+    rawTimes: [],
+    stops: [],
+    vehicle: null,
+    vti: null,
+    stop: null,
+    routed: null,
+    execId: null,
+    ...over,
+  });
+
+  it("live: estimated arrival + delay + minutes-away (matched by designator -> Stop.id)", () => {
+    const trip = view({
+      stop,
+      rawTimes: [time({ designator: 123, estimate: { time_diff: 120 } })],
+    });
+    assert.equal(computeEta(trip, 36000), "na TESTOWA: 10:02 (+2 min) · za 2 min");
+  });
+
+  it("matches by place_id -> Stop.designator when designator is absent", () => {
+    const trip = view({
+      stop,
+      rawTimes: [time({ place_id: "P:9" })],
+    });
+    assert.equal(computeEta(trip, 36000), "na TESTOWA: 10:00 · za 0 min");
+  });
+
+  it("static: planned arrival only", () => {
+    const trip = view({ isLive: false, stop, rawTimes: [time({ designator: 123 })] });
+    assert.equal(computeEta(trip, 36000), "planowany przyjazd 10:00");
+  });
+
+  it("on a doubled-stop spur prefers the visit the vehicle has not passed", () => {
+    const trip = view({
+      stop,
+      vti: 2,
+      rawTimes: [
+        time({ designator: 123, departure_time: "10:00" }),
+        time({ stop_name: "INNY", departure_time: "10:10" }),
+        time({ stop_name: "INNY2", departure_time: "10:20" }),
+        time({ designator: 123, departure_time: "10:30" }),
+      ],
+    });
+    assert.equal(computeEta(trip, 37800), "na TESTOWA: 10:30 · za 0 min");
+  });
+
+  it("falls back to the vehicle's current stop when nothing matches", () => {
+    const trip = view({
+      vti: 1,
+      rawTimes: [time({}), time({ stop_name: "DRUGA" })],
+    });
+    assert.equal(computeEta(trip, 0), "pojazd na: DRUGA");
+  });
+});

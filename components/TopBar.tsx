@@ -1,6 +1,7 @@
 "use client";
 
 import { memo, useEffect, useRef, useState } from "react";
+import { useAnnouncements } from "@/lib/client/announcements";
 import {
   BRAND,
   COLOR_AT_STOP,
@@ -82,6 +83,8 @@ interface Props {
   onBaseLayer: (id: BaseLayerId) => void;
   /** opens the command palette — the bar's "input" is just a trigger */
   onOpenPalette: () => void;
+  /** opens the service-announcements sheet ("Utrudnienia") */
+  onOpenAnnouncements: () => void;
 }
 
 /* ⌘K on Apple hardware, Ctrl K elsewhere (chip is decorative, hidden on touch) */
@@ -107,9 +110,12 @@ function TopBar({
   baseLayer,
   onBaseLayer,
   onOpenPalette,
+  onOpenAnnouncements,
 }: Props) {
   const [menu, setMenu] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  /* store notifies at most once per 15 min — no extra work in the 5 s cycle */
+  const { unseen } = useAnnouncements();
 
   /* close the menu on outside tap */
   useEffect(() => {
@@ -168,6 +174,26 @@ function TopBar({
           />
           {count ?? "…"}
         </span>
+        <button
+          type="button"
+          aria-label={unseen ? "Utrudnienia w ruchu (nowe komunikaty)" : "Utrudnienia w ruchu"}
+          onClick={() => {
+            setMenu(false);
+            onOpenAnnouncements();
+          }}
+          className="relative grid h-11 w-11 shrink-0 place-items-center rounded-full text-text-mute transition-colors hover:bg-white/8 hover:text-text md:h-9 md:w-9"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+            <path d="M12 9v4M12 17h.01" />
+          </svg>
+          {unseen && (
+            <span
+              className="absolute right-2 top-2 h-2 w-2 rounded-full bg-danger md:right-1.5 md:top-1.5"
+              aria-hidden
+            />
+          )}
+        </button>
         <button
           type="button"
           aria-label="Ustawienia mapy"

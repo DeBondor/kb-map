@@ -30,6 +30,10 @@ COPY --from=build --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=build --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=build --chown=nextjs:nodejs /app/public ./public
 
+# writable GTFS output dir: pre-created (owned by nextjs) so the named volume
+# mounted here inherits the ownership and the in-process nightly build can write
+RUN mkdir -p /app/output && chown nextjs:nodejs /app/output
+
 USER nextjs
 EXPOSE 8080
 

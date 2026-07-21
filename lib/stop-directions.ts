@@ -14,19 +14,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 import * as config from "./config";
+import { bearing } from "./geo";
 import { col, parseCsvLine, splitLines } from "./gtfs-csv";
-
-/** Initial great-circle bearing p1→p2 in degrees [0,360), or null if identical. */
-function bearing(lat1: number, lon1: number, lat2: number, lon2: number): number | null {
-  if (lat1 === lat2 && lon1 === lon2) return null;
-  const rad = Math.PI / 180;
-  const phi1 = lat1 * rad;
-  const phi2 = lat2 * rad;
-  const dlon = (lon2 - lon1) * rad;
-  const x = Math.sin(dlon) * Math.cos(phi2);
-  const y = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dlon);
-  return ((Math.atan2(x, y) / rad) + 360) % 360;
-}
 
 /** Smallest absolute angle between two compass bearings, degrees [0,180]. */
 function angleDiff(a: number, b: number): number {
@@ -147,4 +136,9 @@ function compute(): Map<string, number[]> {
 export function getStopDirections(): Map<string, number[]> {
   if (!cache) cache = compute();
   return cache;
+}
+
+/** Drop the cache after a GTFS rebuild so the next read sees the new feed. */
+export function invalidateStopDirections(): void {
+  cache = null;
 }

@@ -6,6 +6,7 @@ import GtfsRealtimeBindings from "gtfs-realtime-bindings";
 import type { transit_realtime } from "gtfs-realtime-bindings";
 
 import * as config from "./config";
+import { bearing, metersBetween } from "./geo";
 import { KbApi, asRecord, isRecord, parseIntStrict, pyTruthy } from "./kb-api";
 import { log } from "./logger";
 import type { Stop, VehicleJson, VehiclePos, VehiclesResponse } from "./types";
@@ -67,26 +68,6 @@ export function hhmmToSecs(hhmm: unknown): number | null {
   const m = parseIntStrict(parts[1]);
   if (h === null || m === null) return null;
   return h * 3600 + m * 60;
-}
-
-/** Approximate metres between two nearby lat/lon points (planar, fine at city scale). */
-export function metersBetween(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const dLat = (lat2 - lat1) * 111_320;
-  const dLon = (lon2 - lon1) * 111_320 * Math.cos(((lat1 + lat2) / 2) * (Math.PI / 180));
-  return Math.hypot(dLat, dLon);
-}
-
-/** Initial great-circle bearing from point 1 to point 2, degrees [0, 360). */
-export function bearing(lat1: number, lon1: number, lat2: number, lon2: number): number | null {
-  if (lat1 === lat2 && lon1 === lon2) return null;
-  const rad = Math.PI / 180;
-  const phi1 = lat1 * rad;
-  const phi2 = lat2 * rad;
-  const dlon = (lon2 - lon1) * rad;
-  const x = Math.sin(dlon) * Math.cos(phi2);
-  const y = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dlon);
-  const b = Math.atan2(x, y) / rad;
-  return (b + 360.0) % 360.0;
 }
 
 /**
@@ -168,6 +149,26 @@ function interruptibleSleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+/** Snapshot of poller liveness/feed state for GET /api/health. */
+export interface PollerHealth {
+  startedAt: number;
+  stops: number;
+  scanCount: number;
+  lastScan: number;
+  lastRefresh: number;
+  /** Epoch secs of the last proven upstream contact. */
+  lastGoodRefresh: number;
+  /** positions.size — includes deliberately hidden ghosts. */
+  tracked: number;
+  /** liveVehicles().length — what the map shows. */
+  live: number;
+  loopRestarts: number;
+  lastLoopError: string | null;
+  lastLoopErrorAt: number;
+  /** Epoch secs of the last successful stop-list load. */
+  stopsLoadedAt: number;
+}
+
 export interface LivePollerOptions {
   scanInterval?: number;
   refreshInterval?: number;
@@ -179,13 +180,6 @@ export interface LivePollerOptions {
   smartScanInterval?: number;
   smartScanWindow?: number;
   batchSize?: number;
-}
-
-interface ScanResult {
-  /** exec_id -> earliest scheduled departure (secs since midnight) */
-  perTrip: Map<string, number>;
-  /** exec_id -> raw departure rows (kept for parity; unused downstream) */
-  rowsByTrip: Map<string, Array<Record<string, unknown>>>;
 }
 
 /**
@@ -210,6 +204,13 @@ export class LivePoller {
   lastScan = 0;
   lastRefresh = 0;
   scanCount = 0;
+  /** Epoch secs when start() succeeded. */
+  startedAt = 0;
+  /** How many times the background loop crashed and was restarted. */
+  loopRestarts = 0;
+  lastLoopError: string | null = null;
+  /** Epoch secs of the last loop crash (0 = never). */
+  lastLoopErrorAt = 0;
 
   /** Bumped whenever `positions` actually changes; keys the snapshot caches. */
   private snapshotVersion = 0;
@@ -232,6 +233,9 @@ export class LivePoller {
   private started = false;
   private stopCtl: AbortController | null = null;
   private runPromise: Promise<void> | null = null;
+  private stopsReloadInFlight = false;
+  /** Epoch secs of the last successful stop-list load. */
+  stopsLoadedAt = 0;
 
   constructor(api: KbApi, opts: LivePollerOptions = {}) {
     this.api = api;
@@ -247,12 +251,38 @@ export class LivePoller {
     this.batchSize = opts.batchSize ?? config.LIVE_BATCH_SIZE;
   }
 
-  /** Load the current stops revision + stop list and build lookup maps. */
-  async loadStops(): Promise<void> {
-    const rev = await this.api.fetchRevision();
-    this.stops = await this.api.fetchStops(rev);
-    this.stopsById = new Map(this.stops.map((s) => [s.internalId, s]));
-    this.stopsByUrlId = new Map(this.stops.map((s) => [s.urlId, s]));
+  /**
+   * Fetch the current stops revision + stop list and swap
+   * stops/stopsById/stopsByUrlId atomically (three synchronous assignments, no
+   * await in between). An empty or failed fetch keeps the previous list.
+   * Returns true when a new list was installed. Single-flight guarded.
+   */
+  async loadStops(): Promise<boolean> {
+    if (this.stopsReloadInFlight) return false;
+    this.stopsReloadInFlight = true;
+    try {
+      const rev = await this.api.fetchRevision();
+      const stops = await this.api.fetchStops(rev);
+      if (stops.length === 0) {
+        log.error("rt", "stops reload: upstream returned an empty list, keeping previous");
+        return false;
+      }
+      const prev = this.stops.length;
+      const byId = new Map(stops.map((s) => [s.internalId, s]));
+      const byUrlId = new Map(stops.map((s) => [s.urlId, s]));
+      this.stops = stops;
+      this.stopsById = byId;
+      this.stopsByUrlId = byUrlId;
+      // drop scan state for stops that no longer exist so the maps stay bounded;
+      // surviving keys are urlIds, their carried state remains valid
+      for (const key of [...this.stopRescanAt.keys()]) if (!byUrlId.has(key)) this.stopRescanAt.delete(key);
+      for (const key of [...this.stopEarliest.keys()]) if (!byUrlId.has(key)) this.stopEarliest.delete(key);
+      this.stopsLoadedAt = Date.now() / 1000;
+      if (prev > 0) log.info("rt", `stops reloaded: ${stops.length} (was ${prev}), rev ${rev}`);
+      return true;
+    } finally {
+      this.stopsReloadInFlight = false;
+    }
   }
 
   /** Load stops and start the background polling loop (no-op when running). */
@@ -264,11 +294,37 @@ export class LivePoller {
     }
     if (this.started) return;
     this.started = true;
+    this.startedAt = Date.now() / 1000;
     this.stopCtl = new AbortController();
     const signal = this.stopCtl.signal;
-    this.runPromise = this.run(signal).catch((err: unknown) => {
-      log.error("rt", `poller loop crashed: ${err}`);
+    // supervise() never rejects; the catch is a belt-and-braces backstop
+    this.runPromise = this.supervise(signal).catch((err: unknown) => {
+      log.error("rt", `poller supervisor crashed: ${err}`);
     });
+  }
+
+  /**
+   * Keeps run() alive: restarts it with capped exponential backoff after a
+   * crash (run() only returns normally on abort, so a non-abort return is a
+   * crash too). A run that survives >5 min resets the backoff.
+   */
+  private async supervise(signal: AbortSignal): Promise<void> {
+    let backoff = 1_000;
+    while (!signal.aborted) {
+      const t0 = Date.now();
+      try {
+        await this.run(signal);
+      } catch (err) {
+        this.lastLoopError = err instanceof Error ? err.message : String(err);
+        this.lastLoopErrorAt = Date.now() / 1000;
+        log.error("rt", `poller loop crashed: ${err}`);
+      }
+      if (signal.aborted) break;
+      backoff = Date.now() - t0 > 5 * 60_000 ? 1_000 : Math.min(backoff * 2, 300_000);
+      this.loopRestarts += 1;
+      log.info("rt", `restarting poller loop in ${Math.round(backoff / 1000)}s (restart #${this.loopRestarts})`);
+      await interruptibleSleep(backoff, signal);
+    }
   }
 
   /** Stop the loop cleanly: aborts sleeps, leaves no dangling timers. */
@@ -283,6 +339,15 @@ export class LivePoller {
   /** Main loop: full scan every scanInterval; between scans, refresh every refreshInterval and smart-scan every smartScanInterval. */
   private async run(signal: AbortSignal): Promise<void> {
     while (!signal.aborted) {
+      if (Date.now() / 1000 - this.stopsLoadedAt >= config.STOPS_RELOAD_SEC) {
+        try {
+          await this.loadStops();
+        } catch (err) {
+          log.error("rt", `stops reload failed: ${err}`);
+          // keep the old list, retry in 30 min instead of hammering every scan
+          this.stopsLoadedAt = Date.now() / 1000 - config.STOPS_RELOAD_SEC + 1800;
+        }
+      }
       try {
         await this.fullScan();
       } catch (err) {
@@ -315,15 +380,16 @@ export class LivePoller {
     }
   }
 
-  /** Fetch departures for the given stops in batches and extract trip candidates (port of _scan_stops_batched). */
+  /** Fetch departures for the given stops in batches and extract trip candidates
+   *  (port of _scan_stops_batched). Returns exec_id -> earliest scheduled
+   *  departure (secs since midnight). */
   private async scanStopsBatched(
     toScan: Stop[],
     now: number,
     nowTs: number,
     rescanOnEmpty: number,
-  ): Promise<ScanResult> {
+  ): Promise<Map<string, number>> {
     const perTrip = new Map<string, number>();
-    const rowsByTrip = new Map<string, Array<Record<string, unknown>>>();
 
     const ids = toScan.map((s) => s.urlId);
     const stopByUrl = new Map(toScan.map((s) => [s.urlId, s]));
@@ -394,12 +460,6 @@ export class LivePoller {
           if (earliest === null || depSec < earliest) earliest = depSec;
           const cur = perTrip.get(eid);
           if (cur === undefined || depSec < cur) perTrip.set(eid, depSec);
-          let bucket = rowsByTrip.get(eid);
-          if (!bucket) {
-            bucket = [];
-            rowsByTrip.set(eid, bucket);
-          }
-          bucket.push(rowRaw);
         }
         if (earliest !== null) {
           this.stopEarliest.set(s.urlId, earliest);
@@ -415,7 +475,7 @@ export class LivePoller {
       }
     }
 
-    return { perTrip, rowsByTrip };
+    return perTrip;
   }
 
   /** Scan all due stops for departures and fetch candidate positions (port of _full_scan). */
@@ -440,12 +500,12 @@ export class LivePoller {
       return;
     }
 
-    const { perTrip, rowsByTrip } = await this.scanStopsBatched(toScan, now, nowTs, this.stopEmptyCache);
+    const perTrip = await this.scanStopsBatched(toScan, now, nowTs, this.stopEmptyCache);
 
     const candidates: Array<[string, number]> = [...perTrip.entries()].filter(([, mnd]) => mnd <= now + this.horizon);
     log.info("rt", `discovered ${perTrip.size} trips, ${candidates.length} candidates (${this.positions.size} active)`);
 
-    await this.fetchPositions(candidates, rowsByTrip);
+    await this.fetchPositions(candidates);
   }
 
   /** Re-scan only stops with imminent departures (port of _smart_scan). */
@@ -462,13 +522,13 @@ export class LivePoller {
     const nBatches = Math.ceil(toScan.length / this.batchSize);
     log.info("rt", `smart scan: ${toScan.length} stops in ${nBatches} batches (departures within ${this.smartScanWindow}s)`);
 
-    const { perTrip, rowsByTrip } = await this.scanStopsBatched(toScan, now, nowTs, this.smartScanInterval);
+    const perTrip = await this.scanStopsBatched(toScan, now, nowTs, this.smartScanInterval);
 
     const candidates: Array<[string, number]> = [...perTrip.entries()].filter(
       ([eid, mnd]) => mnd <= now + this.horizon && !this.positions.has(eid),
     );
     if (candidates.length > 0) {
-      await this.fetchPositions(candidates, rowsByTrip);
+      await this.fetchPositions(candidates);
     }
   }
 
@@ -476,17 +536,11 @@ export class LivePoller {
   private async refreshActive(): Promise<void> {
     if (this.positions.size === 0) return;
     const active = [...this.positions.keys()];
-    await this.fetchPositions(
-      active.map((eid): [string, number] => [eid, 0]),
-      new Map(),
-    );
+    await this.fetchPositions(active.map((eid): [string, number] => [eid, 0]));
   }
 
   /** Fetch trip executions for candidates, honoring the 404 cache (port of _fetch_positions). */
-  private async fetchPositions(
-    candidates: Array<[string, number]>,
-    _rowsByTrip: Map<string, Array<Record<string, unknown>>>,
-  ): Promise<void> {
+  private async fetchPositions(candidates: Array<[string, number]>): Promise<void> {
     const nowTs = Math.floor(Date.now() / 1000);
     const cacheCut = nowTs - this.cache404;
     let fetchOk = 0;
@@ -740,6 +794,24 @@ export class LivePoller {
   /** Count of vehicles currently shown on the map (excludes frozen ghosts). */
   liveCount(): number {
     return this.liveVehicles(Date.now() / 1000).length;
+  }
+
+  /** Internal state snapshot for GET /api/health — no private references leak. */
+  healthSnapshot(): PollerHealth {
+    return {
+      startedAt: this.startedAt,
+      stops: this.stops.length,
+      scanCount: this.scanCount,
+      lastScan: this.lastScan,
+      lastRefresh: this.lastRefresh,
+      lastGoodRefresh: this.lastGoodRefresh,
+      tracked: this.positions.size,
+      live: this.liveCount(),
+      loopRestarts: this.loopRestarts,
+      lastLoopError: this.lastLoopError,
+      lastLoopErrorAt: this.lastLoopErrorAt,
+      stopsLoadedAt: this.stopsLoadedAt,
+    };
   }
 
   /** Cache key: positions version + coarse 5s time bucket (the live filter is

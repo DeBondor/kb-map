@@ -11,9 +11,16 @@ services:
       # ports + healthchecks assume 8080; don't let a PORT in .env move the listener
       PORT: "8080"
     restart: unless-stopped
+    volumes:
+      # built GTFS feed (stop-direction arrows, line catalog) + logs — survives
+      # redeploys; populated by the in-process nightly build (KB_GTFS_AUTOBUILD)
+      - kb-output:/app/output
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       start_period: 20s
       retries: 3
+
+volumes:
+  kb-output:

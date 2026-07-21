@@ -1,4 +1,16 @@
-import type { TripTime, TripView, Vehicle } from "./types";
+import type { Stop, TripTime, TripView, Vehicle } from "./types";
+
+/**
+ * TWO STOP ID SPACES (upstream quirk — crossed on purpose): a trip time's
+ * `designator` is the stop's numeric `Stop.id`, and its `place_id` is the
+ * stop's URL `Stop.designator`. Never compare them any other way.
+ */
+export function tripTimeMatchesStop(
+  t: Pick<TripTime, "designator" | "place_id">,
+  stop: Pick<Stop, "id" | "designator">,
+): boolean {
+  return (t.designator != null && String(t.designator) === String(stop.id)) || t.place_id === stop.designator;
+}
 
 /** Komunikacja Beskidzka brand red. */
 export const BRAND = "#a6192e";
@@ -189,9 +201,7 @@ export function computeEta(trip: TripView, now: number, liveVti?: number | null)
   const vti = liveVti ?? trip.vti;
   let eta = "";
   if (stop) {
-    const matches = (t: TripTime) =>
-      (t.designator != null && String(t.designator) === String(stop.id)) ||
-      t.place_id === stop.designator;
+    const matches = (t: TripTime) => tripTimeMatchesStop(t, stop);
     // out-and-back spurs visit a stop twice — on a live trip prefer the visit
     // the vehicle has not passed yet, falling back to the plain first match
     const st =
