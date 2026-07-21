@@ -16,11 +16,12 @@ npm start            # node scripts/start-server.mjs — syncs .next/static + pu
                      #   (falls back to `next start` if no standalone build exists)
 npm run lint         # eslint .
 npm run typecheck    # tsc --noEmit
-npm run build:gtfs -- --date 2026-07-05   # static GTFS builder (tsx scripts/build-gtfs.ts)
+npm test             # node --import tsx --test "test/**/*.test.ts" — pure-function tests
+npm run build:gtfs -- --date 2026-07-05   # static GTFS builder CLI (logic lives in lib/gtfs-builder.ts)
                      #   flags: --date YYYY-MM-DD, --out DIR, --concurrency N, --no-zip
 ```
 
-There is no test suite. Verification is `npm run typecheck` + `npm run lint` + exercising the running app (`/api/health` shows status/scan counters).
+Verification is `npm run typecheck` + `npm run lint` + `npm test` + exercising the running app (`/api/health` shows status/scan counters). CI (`.github/workflows/ci.yml`) runs all four plus `next build` and `npm audit --audit-level=high`; it must never run `build:gtfs` (hits the live upstream). Tests in `test/` **pin Python-parity semantics** — a failing parity test means a regression in lib code, never "fix" the expectation.
 
 Default port is **8080** everywhere (dev, start script, Dockerfile, compose), not 3000. Docker: `docker compose up -d --build`; healthchecks hit `/api/health`.
 
@@ -40,8 +41,10 @@ instrumentation.ts register()            (Next instrumentation hook, nodejs runt
 
 - Routes under `app/api/` read poller snapshots: `/api/vehicles` (`toJson()`), `/api/gtfs-rt.pb` (`toProtobuf()`, gtfs-realtime-bindings), `/api/stops`, `/api/health`. Every route **also** `await startPoller()` as a lazy fallback, so the poller starts even if instrumentation didn't fire.
 - Passthrough routes (`/api/trip/[tripId]`, `/api/trip_execution`, `/api/stop/[designator]/departures|timetable`, `/api/announcements`) proxy the upstream directly, gated by `lib/rate-limit.ts` (in-memory per-IP token bucket) and `lib/api-helpers.ts` validation.
-- Poller rhythm: full scan of all ~956 stops every 180 s, smart incremental scan every 60 s, position refresh of active vehicles every 15 s. It discovers `trip_execution_id`s from departures (the only way to get positions — they live in a different ID space than static `trip_id`).
-- `lib/stop-directions.ts` derives stop direction arrows from pre-built GTFS files in `output/gtfs/`; missing files silently yield no arrows. Cached once per process.
+- Poller rhythm: full scan of all ~956 stops every 180 s, smart incremental scan every 60 s, position refresh of active vehicles every 15 s. It discovers `trip_execution_id`s from departures (the only way to get positions — they live in a different ID space than static `trip_id`). The loop runs under `supervise()` — a crash restarts it with capped backoff (`loopRestarts` in health). The stop list reloads daily (`KB_STOPS_RELOAD_SEC`) with an atomic map swap; a failed reload keeps the old list.
+- `/api/health` returns `"degraded"` + HTTP 503 (flips Docker healthchecks) when the scan loop stalls or upstream contact exceeds `KB_HEALTH_STALE_SEC` (1200 s > the 600 s overnight all-cached window). Deliberately no vehicle-count condition — 0 at night is normal.
+- `lib/gtfs-refresh.ts` (armed from `startPoller()`, HMR-safe singleton) rebuilds the GTFS feed in-process: immediately when `output/gtfs` is missing (fresh Docker volume), else daily after `KB_GTFS_BUILD_HOUR` Warsaw time, then invalidates the stop-directions/lines caches. It exists because the standalone image ships no tsx/scripts — builder logic lives in `lib/gtfs-builder.ts`, `scripts/build-gtfs.ts` is just the CLI. Compose mounts the named volume `kb-output:/app/output`.
+- `lib/stop-directions.ts` derives stop direction arrows from pre-built GTFS files in `output/gtfs/`; missing files silently yield no arrows. Cached per process until `invalidateStopDirections()`/`invalidateLines()` (called after a rebuild); `/api/stops` re-serializes when either the stop-list or the directions-map identity changes.
 
 ### Frontend
 
@@ -52,6 +55,9 @@ All components are `"use client"`. `app/page.tsx` → `components/MapShell.tsx`,
 - Trip opening uses generation-counter cancellation (`genRef` in MapApp): every async step re-checks `gen !== genRef.current` before setState. New async paths there must do the same or stale trips overwrite newer ones.
 - `VectorBaseLayer` (MapLibre GL vector tiles from OpenFreeMap inside Leaflet's tile pane) and `StopsLayer` (raw `L.layerGroup`, viewport-culled and diffed, zoom ≥ 14) are imperative escape hatches — do not convert StopsLayer to declarative react-leaflet markers.
 - `VehicleLayer` returns null while a trip is open; `TripLayer` draws the tracked vehicle itself, matched from the 5 s poll by `vehicle.id === trip.execId`.
+- Deep links: view state lives in the URL (`?stop=`, `?exec=`, `?trip=`, `?lines=`, `?map=` — codec in `lib/client/urlState.ts`) via the **plain History API, never `next/navigation`** (`useSearchParams` would subscribe the whole map tree to every `moveend` replaceState). MapApp's single sync effect is the only URL writer; `popstate` is close-only (Android back closes sheets, state stays authoritative). `exec=` and `trip=` are separate params because the two trip-ID spaces can't be told apart heuristically.
+- Announcements ("Utrudnienia"): `lib/client/announcements.ts` is a module-level `useSyncExternalStore` store (same pattern as `favorites.ts`) polling `/api/announcements` every 15 min; unread = upstream `hash` vs `kb:annSeen` in localStorage. Never wire it into the 5 s poll cycle.
+- PWA updates: `public/sw.js` deliberately does **not** `skipWaiting()` on install — a new SW waits until `PwaRegister`'s toast posts `SKIP_WAITING`, and the reload on `controllerchange` only fires after explicit accept (`clients.claim()` fires it on first install too — an unconditional reload would refresh every new visitor).
 
 ### Single-process assumption
 
