@@ -3,7 +3,8 @@ services:
     build: .
     container_name: kb-gtfs
     ports:
-      - "8080:8080"
+      # host port is env-driven so this host maps 6060; repo default stays 8080
+      - "${KB_HOST_PORT:-8080}:8080"
     env_file:
       - path: .env
         required: false
