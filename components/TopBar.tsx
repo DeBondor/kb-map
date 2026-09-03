@@ -56,19 +56,18 @@ export const BASE_LAYERS: Record<BaseLayerId, BaseLayer> = {
 
 /* When the OpenFreeMap style never loads (CDN down, captive portal, offline
  * PWA), MapApp swaps in a classic raster layer so the user never stares at a
- * blank void. Carto's basemap CDN is purpose-built for this (unlike
- * tile.openstreetmap.org, whose usage policy discourages app traffic) and has
- * a native dark variant, so the fallback matches the chosen theme. */
-export const RASTER_FALLBACK: Record<BaseLayerId, { url: string; attribution: string }> = {
+ * blank void. Standard OpenStreetMap tiles are used without requiring any API key. */
+export const RASTER_FALLBACK: Record<BaseLayerId, { url: string; attribution: string; className?: string }> = {
   kb: {
-    url: "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
+    url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
     attribution:
-      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   },
   dark: {
-    url: "https://{s}.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}{r}.png",
+    url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
     attribution:
-      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    className: "raster-dark-filter",
   },
 };
 
@@ -158,7 +157,8 @@ function TopBar({
             <path d="m20 20-3.5-3.5" />
           </svg>
           <span className="min-w-0 flex-1 truncate text-[14px] text-text-faint">
-            Szukaj przystanku lub linii…
+            <span className="hidden sm:inline">Szukaj przystanku lub linii…</span>
+            <span className="sm:hidden">Szukaj…</span>
           </span>
           <kbd className="mr-1 hidden shrink-0 items-center rounded bg-white/8 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-text-faint md:inline-flex">
             {IS_MAC ? "⌘K" : "Ctrl K"}

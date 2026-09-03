@@ -4,7 +4,22 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import BottomSheet from "@/components/BottomSheet";
 import { useNow } from "@/components/hooks";
 import { BackIcon, CloseIcon, ErrorState, IconButton, LineBadge, ShareButton } from "@/components/ui";
-import { computeEta, delayClass, delayTxt, detectLoopStops, displayStopName, hhmmFromSecs, hslColor, secsFromHHMM, tripTimeMatchesStop } from "@/lib/client/format";
+import {
+  computeEta,
+  delayClass,
+  delayTxt,
+  detectLoopStops,
+  displayStopName,
+  formatPlatform,
+  formatPrzezLoop,
+  hhmmFromSecs,
+  hslColor,
+  isBusStation,
+  przystanekPlural,
+  secsFromHHMM,
+  tripTimeMatchesStop,
+} from "@/lib/client/format";
+import { findActiveStop, type ActiveStopResult } from "@/lib/client/geo";
 import type { Stop, TripView as TripViewState, Vehicle } from "@/lib/client/types";
 
 interface Props {
@@ -75,12 +90,56 @@ function TripView({ trip, desktop, vehMeta, liveVeh, onBack, onClose, onFocusSto
   const lineColor = hslColor(trip.line === "…" ? null : trip.line);
   const loading = trip.status === "loading";
   const failed = trip.status === "error";
-  /* prefer the live poll's current stop over the (frozen) value the route was
-     opened with, so the highlight and "pojazd na" advance as the bus moves;
-     null from the poll (unknown upstream) falls through to the snapshot */
+
+  const currentVeh = liveVeh ?? lastLive.veh;
+  const hasLiveCoords =
+    (currentVeh != null && Number.isFinite(currentVeh.lat) && Number.isFinite(currentVeh.lon)) ||
+    (trip.vehicle != null && Number.isFinite(trip.vehicle.lat) && Number.isFinite(trip.vehicle.lon));
+  const isLiveWithLoc = trip.isLive && hasLiveCoords;
+
+  /* prefer the live poll's current stop over the snapshot */
   const liveVti = liveVeh?.current_stop_sequence ?? lastLive.vti;
-  const vti = liveVti ?? trip.vti;
-  const eta = loading || failed ? "" : computeEta(trip, now, vti);
+
+  /* Dynamically determine the active stop index (current stop the bus is at/approaching) */
+  const activeStop: ActiveStopResult = (() => {
+    const times = trip.rawTimes;
+    if (!times.length) return { index: 0, isAtStop: false };
+
+    if (isLiveWithLoc && trip.stops.length > 0) {
+      const v = liveVeh ?? trip.vehicle;
+      if (v && Number.isFinite(v.lat) && Number.isFinite(v.lon)) {
+        return findActiveStop(
+          trip.stops.map((r) => ({ lat: r.s.lat, lon: r.s.lon })),
+          {
+            lat: v.lat,
+            lon: v.lon,
+            at_stop: liveVeh?.at_stop,
+            current_stop_sequence: liveVti ?? trip.vti,
+          },
+          liveVti ?? trip.vti,
+        );
+      }
+    }
+
+    // Scheduled / no live GPS fix -> calculate from Europe/Warsaw schedule time
+    for (let i = 0; i < times.length; i++) {
+      const sched = secsFromHHMM(times[i].departure_time);
+      if (sched != null && sched > now) {
+        return { index: i, isAtStop: false };
+      }
+    }
+    // All scheduled times in the past -> course completed
+    return { index: times.length - 1, isAtStop: true };
+  })();
+
+  const activeStopIndex = activeStop.index;
+  const isAtStop = activeStop.isAtStop;
+  const vti = activeStopIndex;
+  const eta = loading || failed ? "" : computeEta(trip, now, vti, isAtStop);
+  const remainingStops =
+    activeStopIndex != null ? Math.max(0, trip.rawTimes.length - activeStopIndex) : 0;
+  const isCompleted =
+    activeStopIndex != null && activeStopIndex >= trip.rawTimes.length - 1 && isAtStop;
 
   /** schedule index → resolved physical stop (for fly-to on tap) */
   const stopByIndex = useMemo(() => {
@@ -119,7 +178,7 @@ function TripView({ trip, desktop, vehMeta, liveVeh, onBack, onClose, onFocusSto
             {loading ? "Wczytywanie…" : direction ? displayStopName(direction) : "—"}
           </h2>
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
-            {trip.isLive ? (
+            {isLiveWithLoc ? (
               <span className="inline-flex items-center gap-1.5 rounded-full bg-good/10 px-2 py-0.5 font-semibold text-good">
                 <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-good" aria-hidden />
                 NA ŻYWO
@@ -129,9 +188,16 @@ function TripView({ trip, desktop, vehMeta, liveVeh, onBack, onClose, onFocusSto
                 ROZKŁADOWY
               </span>
             )}
-            {trip.isLive && headerDelay != null && (
+            {isLiveWithLoc && headerDelay != null && (
               <span className={`font-semibold tabular-nums ${delayClass(headerDelay)}`}>
                 {delayTxt(headerDelay)}
+              </span>
+            )}
+            {!loading && !failed && trip.rawTimes.length > 0 && (
+              <span className="rounded-full bg-surface-2 px-2 py-0.5 font-semibold tabular-nums text-text-mute">
+                {isCompleted
+                  ? "Koniec trasy"
+                  : `Pozostało: ${remainingStops} ${przystanekPlural(remainingStops)}`}
               </span>
             )}
             {trip.note && (
@@ -150,7 +216,7 @@ function TripView({ trip, desktop, vehMeta, liveVeh, onBack, onClose, onFocusSto
                   <path d="M7 21l-4-4 4-4" />
                   <path d="M3 17h13" />
                 </svg>
-                przez {loopStops.map(displayStopName).join(", ")}
+                przez {loopStops.map((s) => formatPrzezLoop(displayStopName(s))).join(", ")}
               </span>
             )}
             {trip.status === "routing" && (
@@ -192,11 +258,11 @@ function TripView({ trip, desktop, vehMeta, liveVeh, onBack, onClose, onFocusSto
         ) : (
           <ol className="px-4 pt-1">
             {trip.rawTimes.map((t, idx) => {
-              const isCurrent = trip.isLive && vti != null && idx === vti;
-              const passed = trip.isLive && vti != null && idx < vti;
+              const isCurrent = vti != null && idx === vti;
+              const passed = vti != null && idx < vti;
               const diff = t.estimate?.time_diff ?? null;
               const planned = secsFromHHMM(t.departure_time);
-              const est = trip.isLive && diff != null && planned != null;
+              const est = isLiveWithLoc && diff != null && planned != null;
               const shown = est ? hhmmFromSecs((planned as number) + (diff as number)) : t.departure_time;
               const bigDiff = est && Math.abs(diff as number) > 60;
               const selected = !!trip.stop && tripTimeMatchesStop(t, trip.stop);
@@ -267,13 +333,17 @@ function TripView({ trip, desktop, vehMeta, liveVeh, onBack, onClose, onFocusSto
                       >
                         {displayStopName(t.stop_name)}
                       </span>
-                      {(t.platform || bigDiff) && (
-                        <span className="mt-0.5 block text-[11px] text-text-faint">
-                          {bigDiff ? <s className="tabular-nums">plan {t.departure_time}</s> : null}
-                          {bigDiff && t.platform ? " · " : ""}
-                          {t.platform ? `peron ${t.platform}` : ""}
-                        </span>
-                      )}
+                      {(() => {
+                        const plat = formatPlatform(t.platform, isBusStation(t.stop_name, coord));
+                        if (!plat && !bigDiff) return null;
+                        return (
+                          <span className="mt-0.5 block text-[11px] text-text-faint">
+                            {bigDiff ? <s className="tabular-nums">plan {t.departure_time}</s> : null}
+                            {bigDiff && plat ? " · " : ""}
+                            {plat}
+                          </span>
+                        );
+                      })()}
                     </span>
                   </button>
                 </li>

@@ -19,6 +19,9 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  interactiveWidget: "resizes-content",
   themeColor: "#0d1013",
   // edge-to-edge in standalone/notched displays; safe-area insets handled per component
   viewportFit: "cover",

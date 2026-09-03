@@ -8,8 +8,8 @@
  */
 import * as config from "./config";
 
-const CAP = 200; // burst capacity per IP
-const REFILL_PER_SEC = 25; // sustained requests/sec per IP once the burst is spent
+const CAP = 600; // burst capacity per IP (accommodates 300+ departure timetable fan-outs)
+const REFILL_PER_SEC = 40; // sustained requests/sec per IP once the burst is spent
 const MAX_KEY_LEN = 64; // headers are client-controlled; don't key on arbitrary blobs
 const MAX_BUCKETS = 10_000; // hard cap so spoofed keys can't grow the map unbounded
 

@@ -9,9 +9,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * map — and the tracked vehicle — in view. Only a deliberate flick below
  * `peek` (or the ✕) dismisses it.
  */
-const FULL = 0.88;
-const HALF = 0.5;
-const PEEK = 0.25;
+const FULL = 0.90;
+const HALF = 0.55;
+const PEEK = 0.32;
 
 export type Snap = "peek" | "half" | "full";
 
@@ -220,7 +220,7 @@ export default function BottomSheet({ onClose, desktop, ariaLabel, initialSnap =
         onPointerCancel={onPointerCancel}
         style={{ touchAction: "none" }}
       >
-        <div className="mx-auto mt-2.5 h-1 w-9 rounded-full bg-white/25" aria-hidden />
+        <div className="mx-auto mt-2.5 h-1.5 w-10 rounded-full bg-white/30" aria-hidden />
         {header}
       </div>
       <div className="relative min-h-0 flex-1" style={{ touchAction: "pan-y" }}>

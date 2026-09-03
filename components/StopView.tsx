@@ -6,13 +6,24 @@ import { useNow } from "@/components/hooks";
 import { CloseIcon, EmptyState, ErrorState, IconButton, LineBadge, ShareButton, SkeletonRows, StarIcon } from "@/components/ui";
 import { fetchJSON, getTrip } from "@/lib/client/api";
 import { useFavorites } from "@/lib/client/favorites";
-import { countdown, delayClass, delayTxt, displayStopName, hhmmFromSecs, secsFromHHMM, todayISO } from "@/lib/client/format";
+import {
+  countdown,
+  delayClass,
+  delayTxt,
+  displayStopName,
+  formatPlatform,
+  hhmmFromSecs,
+  isBusStation,
+  secsFromHHMM,
+  todayISO,
+} from "@/lib/client/format";
 import type {
   DepartureRow,
   DeparturesResponse,
   Stop,
   TimetableDeparture,
   TimetableResponse,
+  Trip,
 } from "@/lib/client/types";
 
 type Tab = "live" | "tt";
@@ -54,6 +65,7 @@ function StopView({ stop, desktop, onClose, onShowLive, onShowStatic }: Props) {
   /* module-level store — the palette's favorites section updates live too */
   const { isFav, toggle } = useFavorites();
   const fav = isFav(stop.designator);
+  const isStation = isBusStation(stop.name, stop);
 
   /* live departures — fetch on open / manual retry + 30 s auto refresh
      (the component is keyed by stop.designator in MapApp, so state resets per stop) */
@@ -116,16 +128,28 @@ function StopView({ stop, desktop, onClose, onShowLive, onShowStatic }: Props) {
         const deps = d.departures ?? [];
         if (cancelled) return;
         setTtPhase("trips");
-        const rows = await Promise.all(
-          deps.map(async (dp): Promise<TtRow> => {
-            const trip = await getTrip(dp.trip_id, ac.signal);
-            return {
-              dp,
-              line: trip?.line?.name || "?",
-              dir: trip?.direction || d.main_direction?.name || "",
-            };
-          }),
-        );
+        const uniqueTripIds = Array.from(new Set(deps.map((dp) => dp.trip_id).filter(Boolean)));
+        const tripMap = new Map<string | number, Trip | null>();
+        const BATCH_SIZE = 20;
+        for (let i = 0; i < uniqueTripIds.length; i += BATCH_SIZE) {
+          if (cancelled) return;
+          const batch = uniqueTripIds.slice(i, i + BATCH_SIZE);
+          await Promise.all(
+            batch.map(async (tid) => {
+              const tr = await getTrip(tid, ac.signal);
+              tripMap.set(tid, tr);
+            }),
+          );
+        }
+        if (cancelled) return;
+        const rows: TtRow[] = deps.map((dp) => {
+          const trip = tripMap.get(dp.trip_id);
+          return {
+            dp,
+            line: trip?.line?.name || "?",
+            dir: trip?.direction || d.main_direction?.name || "",
+          };
+        });
         if (!cancelled) setTt(rows);
       } catch {
         if (!cancelled && !ac.signal.aborted) setTtErr(true);
@@ -147,7 +171,7 @@ function StopView({ stop, desktop, onClose, onShowLive, onShowStatic }: Props) {
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-[16px] font-bold leading-tight text-text">{displayStopName(stop.name)}</h2>
           <p className="mt-1 text-[11px] text-text-faint">
-            przystanek · <span className="tabular-nums">{stop.designator}</span>
+            {isBusStation(stop.name, stop) ? "Dworzec autobusowy" : "Przystanek autobusowy"}
           </p>
         </div>
         <ShareButton title={`Przystanek ${displayStopName(stop.name)}`} />
@@ -225,9 +249,10 @@ function StopView({ stop, desktop, onClose, onShowLive, onShowStatic }: Props) {
                 const actual = est && row.time?.includes(":") ? row.time : planned;
                 const line = row.line_name || row.symbol || "?";
                 const plannedIsTime = planned.includes(":");
+                const plat = formatPlatform(row.platform, isStation);
                 const sub = [
                   plannedIsTime ? `plan ${planned}` : "",
-                  row.platform ? `peron ${row.platform}` : "",
+                  plat,
                 ]
                   .filter(Boolean)
                   .join(" · ");
@@ -249,11 +274,15 @@ function StopView({ stop, desktop, onClose, onShowLive, onShowStatic }: Props) {
                       </div>
                       <div className="shrink-0 text-right">
                         <p className={`text-[15px] font-bold tabular-nums ${est ? delayClass(td) : "text-text"}`}>
-                          {countdown(secsFromHHMM(actual), now) || planned}
+                          {est ? countdown(secsFromHHMM(actual), now) || planned : planned}
                         </p>
-                        {est && (
+                        {est ? (
                           <p className={`text-[11px] font-medium tabular-nums ${delayClass(td)}`}>
                             {delayTxt(td)}
+                          </p>
+                        ) : (
+                          <p className="text-[11px] text-text-faint">
+                            rozkładowo
                           </p>
                         )}
                       </div>
@@ -292,8 +321,10 @@ function StopView({ stop, desktop, onClose, onShowLive, onShowStatic }: Props) {
                   <LineBadge line={line} />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-[13px] font-medium text-text">{dir ? displayStopName(dir) : `Linia ${line}`}</p>
-                    {dp.platform && (
-                      <p className="mt-0.5 text-[11px] text-text-faint">peron {dp.platform}</p>
+                    {formatPlatform(dp.platform, isStation) && (
+                      <p className="mt-0.5 text-[11px] text-text-faint">
+                        {formatPlatform(dp.platform, isStation)}
+                      </p>
                     )}
                   </div>
                   <p className="shrink-0 text-[15px] font-bold tabular-nums text-text">

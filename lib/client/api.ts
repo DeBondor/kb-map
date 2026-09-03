@@ -27,7 +27,7 @@ function capMap<V>(m: Map<string, V>, max: number): void {
 }
 
 const tripCache = new Map<string, Promise<Trip | null>>();
-const TRIP_CACHE_MAX = 300;
+const TRIP_CACHE_MAX = 1500;
 
 export function getTrip(tripId: string | number, signal?: AbortSignal): Promise<Trip | null> {
   const key = String(tripId);
@@ -36,17 +36,23 @@ export function getTrip(tripId: string | number, signal?: AbortSignal): Promise<
   // This promise is SHARED by every concurrent caller. Never let it reject: a
   // rethrown AbortError from the first caller's signal would poison the promise
   // for everyone else awaiting it (e.g. leaving MapApp's trip stuck loading).
-  // Resolve null on any error/abort and drop the key so a later caller retries.
-  const p = fetchJSON<Trip>(`/api/trip/${encodeURIComponent(key)}`, { signal, cache: "no-store" })
-    .then((tr) => {
-      // {} = upstream had nothing — don't pin it for the session; a retry refetches
+  // Retry transient 429 (rate-limited) bursts with backoff, resolve null on
+  // final failure and drop the key so a later caller retries.
+  const fetchWithRetry = async (retries = 2, delayMs = 150): Promise<Trip | null> => {
+    try {
+      const tr = await fetchJSON<Trip>(`/api/trip/${encodeURIComponent(key)}`, { signal, cache: "no-store" });
       if (!tr?.times?.length) tripCache.delete(key);
       return tr;
-    })
-    .catch(() => {
+    } catch (err: unknown) {
+      if (retries > 0 && err instanceof HttpError && err.status === 429 && !signal?.aborted) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        return fetchWithRetry(retries - 1, delayMs * 2);
+      }
       tripCache.delete(key);
       return null;
-    });
+    }
+  };
+  const p = fetchWithRetry();
   tripCache.set(key, p);
   capMap(tripCache, TRIP_CACHE_MAX);
   return p;
@@ -62,31 +68,104 @@ interface OsrmResponse {
   routes?: Array<{ geometry?: { coordinates?: Array<[number, number]> } }>;
 }
 
-/**
- * Road geometry through all `points` ([lat, lon]) in ONE OSRM request — the
- * server snaps every waypoint and returns the whole driving line, so an N-stop
- * trip costs a single round-trip instead of N-1. Cached in memory (in-flight
- * included); resolves null when OSRM fails so the caller falls back to straight
- * lines. A transient failure is NOT pinned — the key is dropped so it retries.
- */
-export function fetchRoute(points: LatLng[]): Promise<LatLng[] | null> {
-  if (points.length < 2) return Promise.resolve(null);
+function travelBearing(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const r = Math.PI / 180;
+  const y = Math.sin((lon2 - lon1) * r) * Math.cos(lat2 * r);
+  const x =
+    Math.cos(lat1 * r) * Math.sin(lat2 * r) -
+    Math.sin(lat1 * r) * Math.cos(lat2 * r) * Math.cos((lon2 - lon1) * r);
+  const b = Math.atan2(y, x) * (180 / Math.PI);
+  return Math.round((b + 360) % 360);
+}
+
+async function fetchChunkRoute(points: LatLng[]): Promise<LatLng[]> {
+  if (points.length < 2) return points;
   const key = points.map((p) => `${p[0].toFixed(5)},${p[1].toFixed(5)}`).join(";");
   const hit = routeCache.get(key);
-  if (hit) return hit;
+  if (hit) {
+    const res = await hit;
+    if (res && res.length >= 2) return res;
+  }
   const p = (async (): Promise<LatLng[] | null> => {
+    const coords = points.map((pt) => `${pt[1]},${pt[0]}`).join(";");
+
+    // First attempt: use travel bearings to prevent OSRM from snapping to perpendicular
+    // residential alleys, parking driveways, or dead-ends (e.g. Olimpijska in Szczyrk).
     try {
-      const coords = points.map((pt) => `${pt[1]},${pt[0]}`).join(";");
+      const bearings = points
+        .map((_, idx) => {
+          let b: number;
+          if (idx === 0) b = travelBearing(points[0][0], points[0][1], points[1][0], points[1][1]);
+          else if (idx === points.length - 1)
+            b = travelBearing(points[idx - 1][0], points[idx - 1][1], points[idx][0], points[idx][1]);
+          else
+            b = travelBearing(points[idx - 1][0], points[idx - 1][1], points[idx + 1][0], points[idx + 1][1]);
+          return `${b},45`;
+        })
+        .join(";");
+
+      const d = await fetchJSON<OsrmResponse>(
+        `${OSRM}/${coords}?overview=full&geometries=geojson&bearings=${bearings}`,
+      );
+      const line = d.routes?.[0]?.geometry?.coordinates;
+      if (line && line.length) return line.map((c): LatLng => [c[1], c[0]]);
+    } catch {
+      // bearings might restrict too much on sharp hairpin turns; fall back below
+    }
+
+    // Fallback: standard OSRM call without bearing restrictions
+    try {
       const d = await fetchJSON<OsrmResponse>(`${OSRM}/${coords}?overview=full&geometries=geojson`);
       const line = d.routes?.[0]?.geometry?.coordinates;
       if (line && line.length) return line.map((c): LatLng => [c[1], c[0]]);
     } catch {
-      // fall through — caller draws straight segments instead
+      // fall back to straight line for this chunk
     }
-    routeCache.delete(key); // don't pin a transient OSRM failure for the whole session
+    routeCache.delete(key);
     return null;
   })();
   routeCache.set(key, p);
   capMap(routeCache, ROUTE_CACHE_MAX);
-  return p;
+  const res = await p;
+  return res && res.length >= 2 ? res : points;
+}
+
+/**
+ * Road geometry through `points` ([lat, lon]). Splits longer routes into
+ * overlapping chunks (max 12 waypoints) so OSRM URL limits and waypoint limits
+ * are never exceeded. If any chunk fails, only that segment falls back to
+ * straight lines instead of breaking the entire route.
+ */
+export async function fetchRoute(points: LatLng[]): Promise<LatLng[] | null> {
+  if (points.length < 2) return null;
+  const CHUNK_SIZE = 12;
+  if (points.length <= CHUNK_SIZE) {
+    const res = await fetchChunkRoute(points);
+    return res.length >= 2 ? res : null;
+  }
+
+  const chunks: LatLng[][] = [];
+  for (let i = 0; i < points.length; i += CHUNK_SIZE - 1) {
+    const slice = points.slice(i, i + CHUNK_SIZE);
+    if (slice.length >= 2) chunks.push(slice);
+    if (i + CHUNK_SIZE >= points.length) break;
+  }
+
+  const results = await Promise.all(chunks.map((ch) => fetchChunkRoute(ch)));
+  const merged: LatLng[] = [];
+  for (const part of results) {
+    if (merged.length === 0) {
+      merged.push(...part);
+    } else {
+      const start =
+        part.length > 0 &&
+        Math.abs(part[0][0] - merged[merged.length - 1][0]) < 1e-5 &&
+        Math.abs(part[0][1] - merged[merged.length - 1][1]) < 1e-5
+          ? 1
+          : 0;
+      merged.push(...part.slice(start));
+    }
+  }
+
+  return merged.length >= 2 ? merged : points;
 }

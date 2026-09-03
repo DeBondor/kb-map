@@ -37,6 +37,8 @@ export interface Stop {
   lon: number;
   /** up to two GTFS-derived travel bearings (deg) buses leave this stop on */
   dirs?: number[];
+  isStation?: boolean;
+  showPlatforms?: boolean;
 }
 
 export interface StopsResponse {

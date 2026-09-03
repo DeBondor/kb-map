@@ -110,10 +110,18 @@ export interface VehiclesResponse {
   vehicles: VehicleJson[];
 }
 
-/** GET /api/stops response. `dirs` = up to two GTFS-derived travel bearings. */
 export interface StopsResponse {
   count: number;
-  stops: Array<{ id: string; designator: string; name: string; lat: number; lon: number; dirs?: number[] }>;
+  stops: Array<{
+    id: string;
+    designator: string;
+    name: string;
+    lat: number;
+    lon: number;
+    dirs?: number[];
+    isStation?: boolean;
+    showPlatforms?: boolean;
+  }>;
 }
 
 /** GET /api/health response. "degraded" (served as HTTP 503) = the scan loop

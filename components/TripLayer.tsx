@@ -3,7 +3,7 @@
 import { memo, useEffect, useMemo, useState } from "react";
 import { CircleMarker, Marker, Polyline, Tooltip, useMap } from "react-leaflet";
 import L from "leaflet";
-import { displayStopName, hslColor } from "@/lib/client/format";
+import { displayStopName, formatPlatform, hslColor, isBusStation } from "@/lib/client/format";
 import { bearingBucket, makeVehicleIcon } from "@/lib/client/leafletIcons";
 import { prefersReducedMotion } from "@/lib/client/motion";
 import type { LatLng, TripView, Vehicle } from "@/lib/client/types";
@@ -114,7 +114,9 @@ function TripLayer({ trip, desktop, vehMeta, liveVehicle }: Props) {
         >
           <Tooltip direction="top" sticky className="kb-tooltip">
             {displayStopName(t.stop_name)} · {t.departure_time}
-            {t.platform ? ` (peron ${t.platform})` : ""}
+            {formatPlatform(t.platform, isBusStation(t.stop_name, s))
+              ? ` (${formatPlatform(t.platform, isBusStation(t.stop_name, s))})`
+              : ""}
           </Tooltip>
         </CircleMarker>
       ))}

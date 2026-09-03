@@ -507,7 +507,6 @@ function PaletteDialog({
               {it.dist != null && (
                 <span className="shrink-0 text-[11px] tabular-nums text-text-mute">{formatDistance(it.dist)}</span>
               )}
-              <span className="shrink-0 text-[11px] tabular-nums text-text-faint">{it.s.designator}</span>
             </>
           )}
           {it.kind === "veh" && (

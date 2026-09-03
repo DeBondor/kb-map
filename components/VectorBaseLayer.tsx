@@ -14,14 +14,21 @@ import "@maplibre/maplibre-gl-leaflet";
  */
 export type BasemapStatus = "loading" | "ready" | "failed";
 
-/** the slice of maplibregl.Map we touch — keeps maplibre types out of the bundle */
 type GlMap = {
   once(type: "idle" | "styledata", fn: () => void): unknown;
-  on(type: "error", fn: () => void): unknown;
-  off(type: "idle" | "error" | "styledata", fn: () => void): unknown;
+  on(type: "error" | "styleimagemissing", fn: (e?: { id?: string }) => void): unknown;
+  off(type: "idle" | "error" | "styledata" | "styleimagemissing", fn: (e?: { id?: string }) => void): unknown;
   isStyleLoaded(): boolean;
   areTilesLoaded(): boolean;
   resize(): unknown;
+  hasImage?(id: string): boolean;
+  addImage?(id: string, image: { width: number; height: number; data: Uint8Array }): unknown;
+};
+
+const EMPTY_SPRITE_IMAGE = {
+  width: 1,
+  height: 1,
+  data: new Uint8Array(4), // transparent 1x1 pixel fallback for missing sprite icons
 };
 type MaplibreGLLayer = L.Layer & {
   getContainer: () => HTMLDivElement;
@@ -45,7 +52,7 @@ const OFM_ATTRIBUTION =
   'Data <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">&copy; OpenStreetMap</a>';
 
 /** style JSON never arrived after this long → give up and let the caller fall back */
-const STYLE_TIMEOUT_MS = 12_000;
+const STYLE_TIMEOUT_MS = 15_000;
 
 export default function VectorBaseLayer({
   style,
@@ -119,6 +126,18 @@ export default function VectorBaseLayer({
       () => settle(gl.isStyleLoaded() ? "ready" : "failed"),
       STYLE_TIMEOUT_MS,
     );
+    const onImageMissing = (e?: { id?: string }) => {
+      const id = e?.id;
+      if (!id) return;
+      try {
+        if (!gl.hasImage || !gl.hasImage(id)) {
+          gl.addImage?.(id, EMPTY_SPRITE_IMAGE);
+        }
+      } catch {
+        // ignore duplicate addImage
+      }
+    };
+    gl.on("styleimagemissing", onImageMissing);
     gl.once("idle", onIdle);
     gl.on("error", onErr);
     /* re-measure once layout settles (dvh on mobile) — a canvas created from a
@@ -131,6 +150,7 @@ export default function VectorBaseLayer({
       // unhook GL listeners before removeLayer — onRemove nulls the GL map
       cancelAnimationFrame(raf);
       window.clearTimeout(timer);
+      gl.off("styleimagemissing", onImageMissing);
       gl.off("idle", onIdle);
       gl.off("error", onErr);
       gl.off("styledata", onStyleData);

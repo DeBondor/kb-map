@@ -9,10 +9,19 @@ export default function manifest(): MetadataRoute.Manifest {
     id: "/",
     start_url: "/",
     display: "standalone",
+    orientation: "any",
     background_color: "#0d1013",
     theme_color: "#0d1013",
     lang: "pl",
     categories: ["travel", "navigation", "utilities"],
+    shortcuts: [
+      {
+        name: "Szukaj przystanku lub linii",
+        short_name: "Szukaj",
+        url: "/",
+        icons: [{ src: "/icon-192.png", sizes: "192x192" }],
+      },
+    ],
     icons: [
       { src: "/icon-192.png", sizes: "192x192", type: "image/png" },
       { src: "/icon-512.png", sizes: "512x512", type: "image/png" },

@@ -31,6 +31,8 @@ export async function GET(): Promise<Response> {
             lat: s.lat,
             lon: s.lon,
             ...(d && d.length ? { dirs: d } : {}),
+            ...(s.isStation ? { isStation: true } : {}),
+            ...(s.showPlatforms ? { showPlatforms: true } : {}),
           };
         }),
       };

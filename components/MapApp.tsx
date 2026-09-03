@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AttributionControl, Circle, MapContainer, Marker, TileLayer, ZoomControl, useMap } from "react-leaflet";
 import L from "leaflet";
 import { fetchJSON, fetchRoute, getTrip } from "@/lib/client/api";
+import { adjustStopRoutePoint, injectDetourPoints } from "@/lib/client/detours";
 import { tripTimeMatchesStop } from "@/lib/client/format";
 import { makeStopPingIcon, makeUserLocationIcon } from "@/lib/client/leafletIcons";
 import { panMotion } from "@/lib/client/motion";
@@ -202,13 +203,19 @@ export default function MapApp() {
         const selected = !!stop && tripTimeMatchesStop(t, stop);
         resolved.push({ t, s: c, selected });
       }
-      const pts: LatLng[] = resolved.map(({ s }): LatLng => [s.lat, s.lon]);
+      const pts: LatLng[] = resolved.map(({ s }): LatLng => adjustStopRoutePoint(s.id, [s.lat, s.lon]));
       const needRoute = pts.length >= 2;
+      const { points: routePts, detour } = injectDetourPoints(
+        pts,
+        tripData?.line?.name,
+        tripData?.direction,
+      );
+      const tripNote = note ?? (detour ? detour.title : null);
       setTrip({
         gen,
         isLive,
         status: needRoute ? "routing" : "ready",
-        note,
+        note: tripNote,
         line: tripData?.line?.name || "?",
         direction: tripData?.direction || "",
         rawTimes: times,
@@ -220,7 +227,7 @@ export default function MapApp() {
         execId,
       });
       if (!needRoute) return;
-      const road = await fetchRoute(pts);
+      const road = await fetchRoute(routePts);
       if (gen !== genRef.current) return;
       // OSRM road geometry when available; straight lines through the stops if not
       const routed = road && road.length >= 2 ? road : pts;
@@ -318,7 +325,20 @@ export default function MapApp() {
           resp.vehicle && Number.isFinite(vLat) && Number.isFinite(vLon)
             ? { lat: vLat, lon: vLon }
             : null;
-        await buildTrip(gen, resp.trip, veh, resp.vehicle_trip_index ?? null, stop, true, null, execId);
+        const liveInFleet = vehiclesRef.current.some(
+          (v) => v.id === execId && Number.isFinite(v.lat) && Number.isFinite(v.lon),
+        );
+        const hasLivePosition = veh !== null || liveInFleet;
+        await buildTrip(
+          gen,
+          resp.trip,
+          veh,
+          resp.vehicle_trip_index ?? null,
+          stop,
+          hasLivePosition,
+          null,
+          execId,
+        );
       } catch {
         if (gen !== genRef.current) return;
         setTrip((prev) => (prev && prev.gen === gen ? { ...prev, status: "error" } : prev));
@@ -648,6 +668,7 @@ export default function MapApp() {
           <TileLayer
             key={`fb-${baseLayer}`}
             url={RASTER_FALLBACK[baseLayer].url}
+            className={RASTER_FALLBACK[baseLayer].className}
             maxZoom={19}
             attribution={RASTER_FALLBACK[baseLayer].attribution}
           />

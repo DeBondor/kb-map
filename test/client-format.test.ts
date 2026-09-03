@@ -8,9 +8,13 @@ import {
   delayTxt,
   detectLoopStops,
   displayStopName,
+  formatPlatform,
+  formatPrzezLoop,
   hhmmFromSecs,
   hslColor,
+  isBusStation,
   normalizeText,
+  przystanekPlural,
   secsFromHHMM,
   wozPlural,
 } from "../lib/client/format";
@@ -108,12 +112,48 @@ describe("detectLoopStops", () => {
     assert.deepEqual(detectLoopStops(t(["A", "B", "C", "B", "A"])), []);
   });
 
-  it("names a small doubled spur", () => {
-    assert.deepEqual(detectLoopStops(t(["A", "B", "S", "B", "C"])), ["B"]);
+  it("names the apex stop of a pocket spur", () => {
+    assert.deepEqual(detectLoopStops(t(["A", "B", "S", "B", "C"])), ["S"]);
   });
 
-  it("rejects long backtracks (>3 doubled stops)", () => {
-    assert.deepEqual(detectLoopStops(t(["A", "B", "C", "D", "E", "D", "C", "B", "E", "F", "G"])), []);
+  it("identifies Szczyrk Biła as the loop destination for line 120", () => {
+    const stops = [
+      "Szczyrk Centrum",
+      "Szczyrk Beskidek",
+      "Szczyrk Pod Stromą",
+      "Szczyrk Przedszkole",
+      "Szczyrk Biła",
+      "Szczyrk Beskid Arena",
+      "Szczyrk Przedszkole",
+      "Szczyrk Pod Stromą",
+      "Szczyrk Beskidek",
+      "Szczyrk Nowy Kościół",
+    ];
+    assert.deepEqual(detectLoopStops(t(stops)), ["Szczyrk Biła"]);
+  });
+
+  it("rejects long backtracks (>14 doubled stops)", () => {
+    assert.deepEqual(detectLoopStops(t(["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "A"])), []);
+  });
+});
+
+describe("formatPrzezLoop", () => {
+  it("declines Biła to Biłą in accusative", () => {
+    assert.equal(formatPrzezLoop("Szczyrk Biła"), "Szczyrk Biłą");
+  });
+
+  it("declines Pętla to Pętlę", () => {
+    assert.equal(formatPrzezLoop("Bystra Pętla"), "Bystra Pętlę");
+    assert.equal(formatPrzezLoop("Międzybrodzie Żywieckie Pętla"), "Międzybrodzie Żywieckie Pętlę");
+    assert.equal(formatPrzezLoop("Międzyrzecze Dolne Strefa Pętla"), "Międzyrzecze Dolne Strefa Pętlę");
+  });
+
+  it("passes other names through", () => {
+    assert.equal(formatPrzezLoop("Szczyrk Centrum"), "Szczyrk Centrum");
+    assert.equal(formatPrzezLoop("Czaniec Zagłębocze"), "Czaniec Zagłębocze");
+    assert.equal(formatPrzezLoop("Jaworze Górne"), "Jaworze Górne");
+    assert.equal(formatPrzezLoop("Kaniów Krzyż"), "Kaniów Krzyż");
+    assert.equal(formatPrzezLoop(""), "");
   });
 });
 
@@ -192,5 +232,49 @@ describe("computeEta", () => {
       rawTimes: [time({}), time({ stop_name: "DRUGA" })],
     });
     assert.equal(computeEta(trip, 0), "pojazd na: DRUGA");
+  });
+});
+
+describe("isBusStation", () => {
+  it("detects D.A. and Dworzec Autobusowy in stop names", () => {
+    assert.equal(isBusStation("BIELSKO-BIAŁA D.A."), true);
+    assert.equal(isBusStation("Andrychów D.A."), true);
+    assert.equal(isBusStation("Kęty Dworzec Autobusowy"), true);
+  });
+
+  it("recognizes showPlatforms flag on stop object", () => {
+    assert.equal(isBusStation("Zwykły Przystanek", { showPlatforms: true }), true);
+  });
+
+  it("returns false for regular bus stops", () => {
+    assert.equal(isBusStation("Bielsko-Biała Warszawska Dworzec"), false);
+    assert.equal(isBusStation("Kozy Centrum"), false);
+    assert.equal(isBusStation("Szczyrk Skrzyczne"), false);
+  });
+});
+
+describe("formatPlatform", () => {
+  it("formats stanowisko for bus stations", () => {
+    assert.equal(formatPlatform("3", true), "stanowisko 3");
+    assert.equal(formatPlatform(2, true), "stanowisko 2");
+  });
+
+  it("returns empty string for non-stations or missing platform", () => {
+    assert.equal(formatPlatform("3", false), "");
+    assert.equal(formatPlatform(null, true), "");
+    assert.equal(formatPlatform(undefined, true), "");
+  });
+});
+
+describe("przystanekPlural", () => {
+  it("follows Polish plural rules for stops", () => {
+    assert.equal(przystanekPlural(1), "przystanek");
+    assert.equal(przystanekPlural(2), "przystanki");
+    assert.equal(przystanekPlural(4), "przystanki");
+    assert.equal(przystanekPlural(5), "przystanków");
+    assert.equal(przystanekPlural(11), "przystanków");
+    assert.equal(przystanekPlural(14), "przystanków");
+    assert.equal(przystanekPlural(22), "przystanki");
+    assert.equal(przystanekPlural(25), "przystanków");
   });
 });

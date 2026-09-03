@@ -169,34 +169,87 @@ export function todayISO(): string {
 }
 
 /**
- * Names of the (few) stops a course detours through — a small spur visited
- * twice mid-route, like line 120's out-and-back to SZCZYRK BIŁA. Returns [] for
- * ordinary there-and-back round trips (which start and end at the same terminus
- * and double most of their stops) so the "przez …" badge only marks a genuine,
- * concise detour rather than listing a whole return leg.
+ * Formats a loop / spur stop name in Polish accusative after "przez",
+ * e.g. "Szczyrk Biła" -> "Szczyrk Biłą", "Pętla" -> "Pętlę", "Górka" -> "Górkę".
+ */
+export function formatPrzezLoop(name: string): string {
+  if (!name) return "";
+  if (/\bBiła\b/i.test(name)) {
+    return name.replace(/\bBiła\b/gi, "Biłą");
+  }
+  if (/\bPętla\b/i.test(name)) {
+    return name.replace(/\bPętla\b/gi, "Pętlę");
+  }
+  if (/\bGórka\b/i.test(name)) {
+    return name.replace(/\bGórka\b/gi, "Górkę");
+  }
+  return name;
+}
+
+/**
+ * Detects out-and-back spurs / loops (wjazdy kieszeniowe / pętle), such as
+ * line 120's branch to SZCZYRK BIŁA.
+ * Identifies the apex / turnaround destination stop of the spur.
  */
 export function detectLoopStops(times: Array<{ stop_name: string }>): string[] {
   const n = times.length;
   if (n < 4) return [];
-  // returns to where it started → round trip, not a notable via-detour
   const first = times[0]?.stop_name;
   const last = times[n - 1]?.stop_name;
   if (first && last && first === last) return [];
-  const mid = new Map<string, number>();
+
+  // Count visits to each stop name between terminus stops
+  const counts = new Map<string, number>();
   for (let i = 1; i < n - 1; i++) {
     const nm = times[i].stop_name;
-    if (nm) mid.set(nm, (mid.get(nm) ?? 0) + 1);
+    if (nm) counts.set(nm, (counts.get(nm) ?? 0) + 1);
   }
-  const doubled: string[] = [];
-  for (const [nm, c] of mid) if (c >= 2) doubled.push(nm);
-  // a genuine spur doubles just a handful of stops; more than that means the
-  // course backtracks over a long stretch (a there-and-back) → not a via-detour
-  if (doubled.length === 0 || doubled.length > 3) return [];
-  return doubled;
+
+  // Find all indices of doubled stops in mid-route
+  const doubledIndices: number[] = [];
+  for (let i = 1; i < n - 1; i++) {
+    const nm = times[i].stop_name;
+    if (nm && (counts.get(nm) ?? 0) >= 2) {
+      doubledIndices.push(i);
+    }
+  }
+
+  if (doubledIndices.length === 0) return [];
+  const minIdx = doubledIndices[0];
+  const maxIdx = doubledIndices[doubledIndices.length - 1];
+
+  // A genuine spur doubles a localized stretch (span <= 14 stops)
+  if (maxIdx - minIdx > 14) return [];
+
+  const spurSlice = times.slice(minIdx, maxIdx + 1);
+  const spurNames = spurSlice.map((s) => s.stop_name);
+
+  // The apex stops are those visited only ONCE at the turnaround point of the spur
+  const spurCounts = new Map<string, number>();
+  for (const nm of spurNames) {
+    spurCounts.set(nm, (spurCounts.get(nm) ?? 0) + 1);
+  }
+
+  const apexStops = spurNames.filter((nm) => spurCounts.get(nm) === 1);
+  if (apexStops.length > 0) {
+    // Prefer prominent loop designations like "BIŁA" or "PĘTLA"
+    const priority = apexStops.find((nm) => /\b(BIŁA|PĘTLA|GÓRKA)\b/i.test(nm));
+    if (priority) return [priority];
+    return [apexStops[0]];
+  }
+
+  // If even the turnaround stop was doubled, pick the center stop of the spur
+  const centerIdx = Math.floor(spurSlice.length / 2);
+  return [spurSlice[centerIdx].stop_name];
 }
 
-/** ETA line for the trip header — ported 1:1 from the original drawTrip(). */
-export function computeEta(trip: TripView, now: number, liveVti?: number | null): string {
+/** ETA line for the trip header. */
+export function computeEta(
+  trip: TripView,
+  now: number,
+  liveVti?: number | null,
+  isAtStop?: boolean,
+): string {
   const { stop, rawTimes, isLive } = trip;
   const vti = liveVti ?? trip.vti;
   let eta = "";
@@ -222,6 +275,44 @@ export function computeEta(trip: TripView, now: number, liveVti?: number | null)
       }
     }
   }
-  if (!eta && isLive && vti != null && rawTimes[vti]) eta = `pojazd na: ${rawTimes[vti].stop_name}`;
+  if (!eta && isLive && vti != null && rawTimes[vti]) {
+    const target = rawTimes[vti];
+    eta = isAtStop === false ? `następny: ${target.stop_name}` : `pojazd na: ${target.stop_name}`;
+  }
   return eta;
+}
+
+/**
+ * Checks if a stop is a bus station (dworzec autobusowy), where bays/stands
+ * ("stanowiska") are used. Normal bus stops do not use platforms or stands.
+ */
+export function isBusStation(
+  name: string,
+  stop?: { isStation?: boolean; showPlatforms?: boolean } | null,
+): boolean {
+  if (stop?.showPlatforms) return true;
+  return /(?:^|[\s(])(?:D\.A\.|DWORZEC\s+AUTOBUSOWY)(?:$|[\s)])/i.test(name);
+}
+
+/**
+ * Returns "stanowisko X" for bus stations, or an empty string for regular bus stops
+ * where platform/stand numbers are not applicable.
+ */
+export function formatPlatform(
+  platform: string | number | null | undefined,
+  isStation: boolean,
+): string {
+  if (!platform || !isStation) return "";
+  return `stanowisko ${platform}`;
+}
+
+/** Polish pluralization for bus stops: 1 przystanek, 2..4 przystanki, 5+ przystanków. */
+export function przystanekPlural(n: number): string {
+  const abs = Math.abs(n);
+  if (abs === 1) return "przystanek";
+  const tens = abs % 100;
+  const ones = abs % 10;
+  if (tens >= 11 && tens <= 14) return "przystanków";
+  if (ones >= 2 && ones <= 4) return "przystanki";
+  return "przystanków";
 }
