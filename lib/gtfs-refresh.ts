@@ -14,6 +14,7 @@ import { buildGtfs, gtfsFeedDate } from "./gtfs-builder";
 import { invalidateLines } from "./lines";
 import { log } from "./logger";
 import { nowSecs } from "./poller";
+import { invalidateRouter } from "./router";
 import { invalidateStopDirections } from "./stop-directions";
 
 interface RefreshState {
@@ -44,6 +45,7 @@ async function maybeBuild(st: RefreshState): Promise<void> {
     await buildGtfs({ date: today, concurrency: config.GTFS_BUILD_CONCURRENCY });
     invalidateStopDirections();
     invalidateLines();
+    invalidateRouter();
     log.info("gtfs", `feed rebuilt for ${today}`);
   } catch (err) {
     st.nextAttemptAt = Date.now() + FAIL_BACKOFF_MS;
