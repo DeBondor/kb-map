@@ -21,9 +21,6 @@ export type Snap = "peek" | "half" | "full";
 
 const SNAPS: Snap[] = ["full", "half", "peek"];
 
-// Physics parameters (fluid iOS/zbiorkom-like spring)
-const SPRING_STIFFNESS = 280;
-const SPRING_DAMPING = 28;
 
 // Apple WWDC 2018 Fluid Interfaces rubber-band formula
 function rubberband(overshoot: number, dimension: number, constant = 0.45): number {
@@ -61,7 +58,6 @@ export default function BottomSheet({
   const headerRef = useRef<HTMLDivElement>(null);
   const [headerHeight, setHeaderHeight] = useState(160);
   const restoreRef = useRef<HTMLElement | null>(null);
-  const rafRef = useRef<number | null>(null);
   const snapRef = useRef<Snap>(initialSnap);
   const currentYRef = useRef<number>(0);
   const isDraggingRef = useRef(false);
@@ -104,7 +100,7 @@ export default function BottomSheet({
     return () => restoreRef.current?.focus?.();
   }, []);
 
-  const vh = () => window.innerHeight;
+  const vh = () => (typeof window !== "undefined" ? window.innerHeight : 800);
 
   /** translateY (px) that leaves the chosen snap showing */
   const baseY = useCallback((s: Snap) => {
@@ -116,88 +112,16 @@ export default function BottomSheet({
     return FULL * h - peekVisibleH;
   }, []);
 
-  /** Physics-based spring animation to targetY */
-  const animateTo = useCallback((targetY: number, initialVelocity = 0, onComplete?: () => void) => {
-    if (rafRef.current != null) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    }
-
-    // Check reduced motion preference
-    if (typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      currentYRef.current = targetY;
-      if (sheetRef.current) {
-        sheetRef.current.style.transform = `translate3d(0, ${targetY}px, 0)`;
-      }
-      onComplete?.();
-      return;
-    }
-
-    let pos = currentYRef.current;
-    let vel = initialVelocity;
-    let lastTime = performance.now();
-
-    const step = (time: number) => {
-      const dt = Math.min((time - lastTime) / 1000, 0.032);
-      lastTime = time;
-
-      if (dt > 0) {
-        const displacement = pos - targetY;
-        const springForce = -SPRING_STIFFNESS * displacement;
-        const dampingForce = -SPRING_DAMPING * vel;
-        const force = springForce + dampingForce;
-        vel += force * dt;
-        pos += vel * dt;
-      }
-
-      currentYRef.current = pos;
-      if (sheetRef.current) {
-        sheetRef.current.style.transform = `translate3d(0, ${pos}px, 0)`;
-      }
-
-      // Settle condition
-      if (Math.abs(vel) < 1 && Math.abs(pos - targetY) < 0.5) {
-        pos = targetY;
-        currentYRef.current = targetY;
-        if (sheetRef.current) {
-          sheetRef.current.style.transform = `translate3d(0, ${targetY}px, 0)`;
-        }
-        rafRef.current = null;
-        onComplete?.();
-        return;
-      }
-
-      rafRef.current = requestAnimationFrame(step);
-    };
-
-    rafRef.current = requestAnimationFrame(step);
-  }, []);
-
-  // Entrance spring on mount
+  // Entrance transition on mount
   useEffect(() => {
     if (desktop) return;
-    const h = vh();
-    const offscreenY = FULL * h;
-    currentYRef.current = offscreenY;
-    if (sheetRef.current) {
-      sheetRef.current.style.transform = `translate3d(0, ${offscreenY}px, 0)`;
-    }
-    const initialTarget = baseY(initialSnap);
     snapRef.current = initialSnap;
-
+    currentYRef.current = baseY(initialSnap);
     const raf = requestAnimationFrame(() => {
       setMounted(true);
-      animateTo(initialTarget, 0);
     });
-
-    return () => {
-      cancelAnimationFrame(raf);
-      if (rafRef.current != null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-    };
-  }, [desktop, initialSnap, baseY, animateTo]);
+    return () => cancelAnimationFrame(raf);
+  }, [desktop, initialSnap, baseY]);
 
   // Window resize handler
   useEffect(() => {
@@ -220,17 +144,15 @@ export default function BottomSheet({
       if (startRef.current != null || !e.isPrimary) return;
       if ((e.target as HTMLElement).closest?.("button,a,input,[role='button']")) return;
 
-      // Interrupt running animation immediately
-      if (rafRef.current != null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
+      if (sheetRef.current) {
+        sheetRef.current.style.transition = "none";
       }
 
       startRef.current = {
         id: e.pointerId,
         y: e.clientY,
         t: e.timeStamp,
-        base: currentYRef.current,
+        base: currentYRef.current || baseY(snapRef.current),
         target: e.target as HTMLElement,
       };
       movesRef.current = [{ y: e.clientY, t: e.timeStamp }];
@@ -238,7 +160,7 @@ export default function BottomSheet({
       setIsDragging(true);
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     },
-    [desktop],
+    [desktop, baseY],
   );
 
   const onPointerMove = useCallback(
@@ -296,8 +218,12 @@ export default function BottomSheet({
           else nextSnap = "half";
 
           snapRef.current = nextSnap;
+          currentYRef.current = baseY(nextSnap);
+          if (sheetRef.current) {
+            sheetRef.current.style.transition = "transform 0.38s var(--ease-spring)";
+            sheetRef.current.style.transform = `translate3d(0, ${baseY(nextSnap)}px, 0)`;
+          }
           setSnap(nextSnap);
-          animateTo(baseY(nextSnap), 0);
           return;
         }
         return;
@@ -322,7 +248,11 @@ export default function BottomSheet({
 
       // Optional explicit swipe-to-dismiss (only if enabled & swiping fast past peek)
       if (dismissOnDrag && projected > peekY + 120 && releaseVel > 900) {
-        animateTo(FULL * vh(), releaseVel, onClose);
+        if (sheetRef.current) {
+          sheetRef.current.style.transition = "transform 0.28s ease-in";
+          sheetRef.current.style.transform = `translate3d(0, ${FULL * vh()}px, 0)`;
+        }
+        setTimeout(onClose, 280);
         return;
       }
 
@@ -343,10 +273,14 @@ export default function BottomSheet({
       }
 
       snapRef.current = nearest;
+      currentYRef.current = baseY(nearest);
+      if (sheetRef.current) {
+        sheetRef.current.style.transition = "transform 0.38s var(--ease-spring)";
+        sheetRef.current.style.transform = `translate3d(0, ${baseY(nearest)}px, 0)`;
+      }
       setSnap(nearest);
-      animateTo(baseY(nearest), releaseVel);
     },
-    [baseY, animateTo, dismissOnDrag, onClose],
+    [baseY, dismissOnDrag, onClose],
   );
 
   const onPointerCancel = useCallback(
@@ -356,9 +290,12 @@ export default function BottomSheet({
       startRef.current = null;
       isDraggingRef.current = false;
       setIsDragging(false);
-      animateTo(baseY(snapRef.current), 0);
+      if (sheetRef.current) {
+        sheetRef.current.style.transition = "transform 0.38s var(--ease-spring)";
+        sheetRef.current.style.transform = `translate3d(0, ${baseY(snapRef.current)}px, 0)`;
+      }
     },
-    [baseY, animateTo],
+    [baseY],
   );
 
   if (desktop) {
@@ -390,10 +327,14 @@ export default function BottomSheet({
       aria-label={ariaLabel}
       data-snap={snap}
       className={`surface absolute inset-x-0 bottom-0 z-[1001] flex flex-col overflow-hidden rounded-t-[28px] outline-none border-t border-hairline ${
-        mounted ? "" : "translate-y-full"
-      } ${isDragging ? "select-none" : ""}`}
+        isDragging ? "select-none" : ""
+      }`}
       style={{
         height: `${FULL * 100}dvh`,
+        transform: isDragging
+          ? undefined
+          : `translate3d(0, ${mounted ? baseY(snap) : FULL * vh()}px, 0)`,
+        transition: isDragging ? "none" : "transform 0.38s var(--ease-spring)",
         willChange: isDragging ? "transform" : undefined,
         boxShadow: "var(--shadow-sheet)",
       }}
