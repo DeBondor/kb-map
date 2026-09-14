@@ -250,15 +250,16 @@ describe("isBusStation", () => {
     assert.equal(isBusStation("Kęty Dworzec Autobusowy"), true);
   });
 
-  it("recognizes showPlatforms and isStation flags on stop object", () => {
+  it("recognizes showPlatforms flag on stop object", () => {
     assert.equal(isBusStation("Zwykły Przystanek", { showPlatforms: true }), true);
-    assert.equal(isBusStation("Zwykły Przystanek", { isStation: true }), true);
   });
 
-  it("returns false for regular bus stops", () => {
+  it("returns false for regular bus stops even if isStation flag was set on raw stop", () => {
     assert.equal(isBusStation("Bielsko-Biała Warszawska Dworzec"), false);
     assert.equal(isBusStation("Kozy Centrum"), false);
     assert.equal(isBusStation("Szczyrk Skrzyczne"), false);
+    assert.equal(isBusStation("Bestwina Centrum", { isStation: true }), false);
+    assert.equal(isBusStation("Szczyrk Biła", { isStation: true }), false);
   });
 });
 

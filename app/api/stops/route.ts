@@ -23,7 +23,7 @@ export async function GET(): Promise<Response> {
       const body: StopsResponse = {
         count: poller.stops.length,
         stops: poller.stops.map((s) => {
-          const isStn = s.isStation || /(?:^|[\s(])(?:D\.A\.?|DWORZEC\s+AUTOBUSOWY)(?:$|[\s)])/i.test(s.name);
+          const isStn = s.showPlatforms || /(?:^|[\s(])(?:D\.A\.?|DWORZEC\s+AUTOBUSOWY)(?:$|[\s)])/i.test(s.name);
           const d = isStn ? undefined : dirs.get(s.stopId);
           return {
             id: s.stopId,
@@ -32,7 +32,7 @@ export async function GET(): Promise<Response> {
             lat: s.lat,
             lon: s.lon,
             ...(d && d.length ? { dirs: d } : {}),
-            ...(s.isStation ? { isStation: true } : {}),
+            ...(isStn ? { isStation: true } : {}),
             ...(s.showPlatforms ? { showPlatforms: true } : {}),
           };
         }),

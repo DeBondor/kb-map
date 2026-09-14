@@ -145,7 +145,7 @@ function writeGtfs(
     stop_lat: s.lat.toFixed(6),
     stop_lon: s.lon.toFixed(6),
     stop_url: "",
-    location_type: s.isStation ? "1" : "0",
+    location_type: (s.showPlatforms || /(?:^|[\s(])(?:D\.A\.?|DWORZEC\s+AUTOBUSOWY)(?:$|[\s)])/i.test(s.name)) ? "1" : "0",
     parent_station: "",
     stop_timezone: "",
     wheelchair_boarding: "",
