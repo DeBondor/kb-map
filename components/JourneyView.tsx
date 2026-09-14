@@ -132,7 +132,10 @@ function JourneyView({
       header={header}
     >
       {/* Timeline of legs and transfers */}
-      <div className="divide-y divide-hairline px-4 py-3 sm:px-5 space-y-4 overflow-y-auto max-h-[60vh] sm:max-h-[70vh]">
+      <div
+        className="divide-y divide-hairline px-4 py-3 sm:px-5 space-y-4 overflow-y-auto h-full"
+        style={{ paddingBottom: "max(5rem, calc(3rem + env(safe-area-inset-bottom, 24px)))" }}
+      >
         {legs.map((leg, lIdx) => {
           const color = hslColor(leg.line);
           const isExpanded = !!expandedLegs[lIdx];

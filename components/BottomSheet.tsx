@@ -397,7 +397,14 @@ export default function BottomSheet({
         </div>
         {header}
       </div>
-      <div className="relative min-h-0 flex-1" style={{ touchAction: "pan-y" }}>
+      <div
+        className="relative min-h-0 flex-1"
+        style={{
+          touchAction: "pan-y",
+          paddingBottom: `${baseY(snap)}px`,
+          transition: isDragging ? "none" : "padding-bottom 0.38s var(--ease-spring)",
+        }}
+      >
         <div
           className="pointer-events-none absolute inset-x-0 top-0 z-10 h-3 bg-gradient-to-b from-surface to-transparent"
           aria-hidden

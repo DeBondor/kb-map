@@ -47,7 +47,7 @@ function Spinner() {
 
 function TimelineSkeleton() {
   return (
-    <div aria-hidden className="px-5 pt-2">
+    <div aria-hidden className="px-5 pt-2 pb-20" style={{ paddingBottom: "max(5rem, calc(3rem + env(safe-area-inset-bottom, 24px)))" }}>
       {Array.from({ length: 8 }, (_, i) => (
         <div key={i} className="flex items-center gap-4 py-3">
           <div className="skeleton h-3.5 w-10" />
@@ -238,13 +238,13 @@ function TripView({ trip, desktop, vehMeta, liveVeh, onBack, onClose, onFocusSto
       initialSnap="half"
       header={header}
     >
-      <div ref={scrollRef} className="kb-scroll h-full overflow-y-auto pb-5">
+      <div ref={scrollRef} className="kb-scroll h-full overflow-y-auto">
         {failed ? (
           <ErrorState onRetry={onRetry} />
         ) : loading ? (
           <TimelineSkeleton />
         ) : (
-          <ol className="px-4 pt-1">
+          <ol className="px-4 pt-1 pb-20" style={{ paddingBottom: "max(5rem, calc(3rem + env(safe-area-inset-bottom, 24px)))" }}>
             {trip.rawTimes.map((t, idx) => {
               const isCurrent = vti != null && idx === vti;
               const passed = vti != null && idx < vti;

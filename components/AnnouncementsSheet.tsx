@@ -44,7 +44,10 @@ function AnnouncementsSheet({ desktop, onClose }: Props) {
 
   return (
     <BottomSheet desktop={desktop} onClose={onClose} ariaLabel="Utrudnienia w ruchu" header={header}>
-      <div className="kb-scroll h-full overflow-y-auto px-4 pb-5 animate-fade">
+      <div
+        className="kb-scroll h-full overflow-y-auto px-4 animate-fade"
+        style={{ paddingBottom: "max(5rem, calc(3rem + env(safe-area-inset-bottom, 24px)))" }}
+      >
         {status === "error" ? (
           <ErrorState onRetry={() => void refreshAnnouncements()} />
         ) : status === "ready" && items.length === 0 ? (
