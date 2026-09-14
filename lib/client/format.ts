@@ -291,8 +291,8 @@ export function isBusStation(
   name: string,
   stop?: { isStation?: boolean; showPlatforms?: boolean } | null,
 ): boolean {
-  if (stop?.showPlatforms) return true;
-  return /(?:^|[\s(])(?:D\.A\.|DWORZEC\s+AUTOBUSOWY)(?:$|[\s)])/i.test(name);
+  if (stop?.showPlatforms || stop?.isStation) return true;
+  return /(?:^|[\s(])(?:D\.A\.?|DWORZEC\s+AUTOBUSOWY)(?:$|[\s)])/i.test(name);
 }
 
 /**

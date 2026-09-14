@@ -250,8 +250,9 @@ describe("isBusStation", () => {
     assert.equal(isBusStation("Kęty Dworzec Autobusowy"), true);
   });
 
-  it("recognizes showPlatforms flag on stop object", () => {
+  it("recognizes showPlatforms and isStation flags on stop object", () => {
     assert.equal(isBusStation("Zwykły Przystanek", { showPlatforms: true }), true);
+    assert.equal(isBusStation("Zwykły Przystanek", { isStation: true }), true);
   });
 
   it("returns false for regular bus stops", () => {

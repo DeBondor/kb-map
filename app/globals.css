@@ -203,32 +203,60 @@ html, body {
 .stop-mk-icon { background: none; border: 0; }
 .stop-mk {
   position: relative; width: 34px; height: 34px;
+  cursor: pointer;
   animation: pop 0.22s var(--ease-spring) backwards;
+  transition: transform 0.16s var(--ease-spring);
 }
-/* central sign: white rounded chip with a dark bus glyph */
+.leaflet-marker-icon.stop-mk-icon:hover .stop-mk,
+.leaflet-marker-icon.stop-mk-icon:focus-visible .stop-mk {
+  transform: scale(1.18);
+}
+.leaflet-marker-icon.stop-mk-icon:hover { z-index: 100 !important; }
+
+/* central sign: dark transit badge with crisp white border and white bus glyph */
 .stop-mk-sign {
   position: absolute; top: 50%; left: 50%;
   width: 20px; height: 20px; transform: translate(-50%, -50%);
   display: grid; place-items: center;
-  border-radius: 7px;
-  background: #f4f7fa; color: #1d2b39;
-  border: 1.5px solid rgba(13, 16, 19, 0.55);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  border-radius: 999px;
+  background: var(--color-surface, #16191d);
+  color: #ffffff;
+  border: 1.5px solid rgba(255, 255, 255, 0.95);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5), 0 3px 8px -1px rgba(0, 0, 0, 0.5);
+  box-sizing: border-box;
+  z-index: 2;
 }
-.stop-mk-sign svg { width: 14px; height: 14px; }
-/* one wrapper per bearing: rotate the frame, arrow is pushed "north" then points out */
+.stop-mk-sign svg { width: 12px; height: 12px; display: block; }
+
+/* bus station (D.A.) badge: distinctive KB brand red hub without arrows */
+.stop-mk-sign.stop-mk-station {
+  width: 24px; height: 24px;
+  background: linear-gradient(145deg, #c22239, #951426);
+  border: 2px solid #ffffff;
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5), 0 0 0 2px rgba(166, 25, 46, 0.35);
+  z-index: 3;
+}
+.stop-mk-sign.stop-mk-station svg { width: 13px; height: 13px; }
+
+/* one wrapper per bearing: rotates from center, arrow tip points along road */
 .stop-dir {
   position: absolute; inset: 0;
-  display: grid; place-items: center;
+  transform-origin: 17px 17px;
   pointer-events: none;
+  z-index: 1;
 }
-.stop-dir-a {
-  width: 0; height: 0;
-  border-left: 5px solid transparent;
-  border-right: 5px solid transparent;
-  border-bottom: 8px solid #2b83ff;
-  transform: translateY(-13px);
-  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.45));
+.stop-dir-ptr {
+  position: absolute; top: 0.5px; left: 50%;
+  transform: translateX(-50%);
+  width: 12px; height: 8px;
+  display: flex; justify-content: center; align-items: center;
+  color: #ffffff;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.7));
+}
+.stop-arrow-svg {
+  width: 12px; height: 8px;
+  display: block;
 }
 
 /* selected-stop pulse marker */

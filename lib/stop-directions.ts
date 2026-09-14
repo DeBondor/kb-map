@@ -23,42 +23,77 @@ function angleDiff(a: number, b: number): number {
   return d > 180 ? 360 - d : d;
 }
 
-/**
- * Greedily cluster bearings (circular, within THRESHOLD) and return the up-to-2
- * dominant directions, ordered by support. A weak second cluster (one that only
- * a couple of trips back) is dropped so a stray routing doesn't add a false arrow.
- */
-function dominantDirections(bearings: number[]): number[] {
-  const THRESHOLD = 35;
-  const clusters: Array<{ sin: number; cos: number; n: number }> = [];
+/** Circular mean of compass bearings, in degrees [0, 360). */
+function circularMean(bearings: number[]): number {
+  let sin = 0;
+  let cos = 0;
   for (const b of bearings) {
     const r = (b * Math.PI) / 180;
-    let best = -1;
-    let bestDiff = THRESHOLD;
+    sin += Math.sin(r);
+    cos += Math.cos(r);
+  }
+  return Math.round(((Math.atan2(sin, cos) * 180) / Math.PI + 360) % 360);
+}
+
+/**
+ * Cluster tangent bearings along the road. Bearings within MERGE_THRESHOLD (75°)
+ * represent the same direction of travel along the street (e.g. buses that branch
+ * or turn at a junction further down).
+ *
+ * A second cluster is kept ONLY if it represents the opposite direction of traffic
+ * along the road (angleDiff >= 100°, typically ~180°) with sufficient trip support.
+ * Bus stations (D.A.) are explicitly stripped of arrows.
+ */
+function clusterRoadDirections(bearings: number[]): number[] {
+  if (!bearings.length) return [];
+  const MERGE_THRESHOLD = 75;
+  const clusters: number[][] = [];
+
+  for (const b of bearings) {
+    let bestIdx = -1;
+    let bestDiff = MERGE_THRESHOLD;
     for (let i = 0; i < clusters.length; i++) {
-      const mean = ((Math.atan2(clusters[i].sin, clusters[i].cos) * 180) / Math.PI + 360) % 360;
-      const d = angleDiff(b, mean);
-      if (d < bestDiff) { bestDiff = d; best = i; }
+      const mean = circularMean(clusters[i]);
+      const diff = angleDiff(b, mean);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        bestIdx = i;
+      }
     }
-    if (best >= 0) {
-      clusters[best].sin += Math.sin(r);
-      clusters[best].cos += Math.cos(r);
-      clusters[best].n += 1;
+    if (bestIdx >= 0) {
+      clusters[bestIdx].push(b);
     } else {
-      clusters.push({ sin: Math.sin(r), cos: Math.cos(r), n: 1 });
+      clusters.push([b]);
     }
   }
-  clusters.sort((a, b) => b.n - a.n);
-  const kept = clusters
-    .slice(0, 2)
-    .filter((c, i) => i === 0 || (c.n >= 2 && c.n >= clusters[0].n * 0.2));
-  return kept.map((c) => Math.round(((Math.atan2(c.sin, c.cos) * 180) / Math.PI + 360) % 360));
+
+  clusters.sort((a, b) => b.length - a.length);
+
+  const primary = circularMean(clusters[0]);
+  const result = [primary];
+
+  for (let i = 1; i < clusters.length; i++) {
+    const mean = circularMean(clusters[i]);
+    const diff = angleDiff(primary, mean);
+    if (diff >= 100 && clusters[i].length >= 2 && clusters[i].length >= clusters[0].length * 0.15) {
+      result.push(mean);
+      break; // At most 2 opposite directions along a road
+    }
+  }
+
+  return result;
 }
 
 let cache: Map<string, number[]> | null = null;
 
 function compute(): Map<string, number[]> {
-  const dir = config.GTFS_DIR;
+  let dir = config.GTFS_DIR;
+  if (!fs.existsSync(path.join(dir, "stops.txt"))) {
+    const fixtureDir = path.join(process.cwd(), "test", "fixtures", "gtfs");
+    if (fs.existsSync(path.join(fixtureDir, "stops.txt"))) {
+      dir = fixtureDir;
+    }
+  }
   const result = new Map<string, number[]>();
   let stopsTxt: string;
   let timesTxt: string;
@@ -69,14 +104,17 @@ function compute(): Map<string, number[]> {
     return result; // no feed → no arrows
   }
 
-  // stop_id → [lat, lon]
+  // stop_id → [lat, lon] and station identification
   const coords = new Map<string, [number, number]>();
+  const stationStops = new Set<string>();
   {
     const lines = splitLines(stopsTxt);
     const header = parseCsvLine(lines[0]);
     const iId = col(header, "stop_id");
+    const iName = col(header, "stop_name");
     const iLat = col(header, "stop_lat");
     const iLon = col(header, "stop_lon");
+    const iLocType = col(header, "location_type");
     for (let i = 1; i < lines.length; i++) {
       if (!lines[i]) continue;
       const f = parseCsvLine(lines[i]);
@@ -84,7 +122,14 @@ function compute(): Map<string, number[]> {
       if (!f[iId] || f[iLat] === "" || f[iLon] === "") continue;
       const lat = Number(f[iLat]);
       const lon = Number(f[iLon]);
-      if (Number.isFinite(lat) && Number.isFinite(lon)) coords.set(f[iId], [lat, lon]);
+      if (Number.isFinite(lat) && Number.isFinite(lon)) {
+        coords.set(f[iId], [lat, lon]);
+      }
+      const name = f[iName] ?? "";
+      const locType = f[iLocType] ?? "";
+      if (locType === "1" || /(?:^|[\s(])(?:D\.A\.?|DWORZEC\s+AUTOBUSOWY)(?:$|[\s)])/i.test(name)) {
+        stationStops.add(f[iId]);
+      }
     }
   }
 
@@ -109,24 +154,41 @@ function compute(): Map<string, number[]> {
     arr.push([seq, stopId]);
   }
 
-  // accumulate outgoing bearings per stop
+  // accumulate road tangent bearings per stop
   const acc = new Map<string, number[]>();
   for (const arr of perTrip.values()) {
     arr.sort((a, b) => a[0] - b[0]);
-    for (let i = 0; i < arr.length - 1; i++) {
-      const a = coords.get(arr[i][1]);
-      const b = coords.get(arr[i + 1][1]);
-      if (!a || !b) continue;
-      const brg = bearing(a[0], a[1], b[0], b[1]);
+    for (let i = 0; i < arr.length; i++) {
+      const currId = arr[i][1];
+      if (stationStops.has(currId)) continue; // Never give arrows to D.A. / stations
+
+      const c = coords.get(currId);
+      if (!c) continue;
+
+      const p = i > 0 ? coords.get(arr[i - 1][1]) : null;
+      const n = i < arr.length - 1 ? coords.get(arr[i + 1][1]) : null;
+
+      let brg: number | null = null;
+      if (p && n) {
+        // Tangent of the road through curr
+        brg = bearing(p[0], p[1], n[0], n[1]);
+      } else if (n) {
+        // First stop: outgoing direction
+        brg = bearing(c[0], c[1], n[0], n[1]);
+      } else if (p) {
+        // Last stop: incoming direction
+        brg = bearing(p[0], p[1], c[0], c[1]);
+      }
+
       if (brg === null) continue;
-      let list = acc.get(arr[i][1]);
-      if (!list) { list = []; acc.set(arr[i][1], list); }
+      let list = acc.get(currId);
+      if (!list) { list = []; acc.set(currId, list); }
       list.push(brg);
     }
   }
 
   for (const [stopId, bearings] of acc) {
-    const dirs = dominantDirections(bearings);
+    const dirs = clusterRoadDirections(bearings);
     if (dirs.length) result.set(stopId, dirs);
   }
   return result;

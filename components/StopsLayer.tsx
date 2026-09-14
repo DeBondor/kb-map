@@ -3,7 +3,7 @@
 import { memo, useEffect, useRef } from "react";
 import { useMap } from "react-leaflet";
 import L from "leaflet";
-import { displayStopName } from "@/lib/client/format";
+import { displayStopName, isBusStation } from "@/lib/client/format";
 import { makeStopIcon } from "@/lib/client/leafletIcons";
 import type { Stop } from "@/lib/client/types";
 
@@ -38,10 +38,12 @@ function StopsLayer({ stops, visible, onSelect }: Props) {
     const iconCache = new Map<string, L.DivIcon>();
 
     const iconFor = (s: Stop): L.DivIcon => {
-      const key = s.dirs?.length ? s.dirs.join(",") : "-";
+      const isStation = isBusStation(s.name, s);
+      const dirs = isStation ? [] : (s.dirs ?? []);
+      const key = `${isStation ? "stn" : "stop"}-${dirs.length ? dirs.join(",") : "-"}`;
       let ic = iconCache.get(key);
       if (!ic) {
-        ic = makeStopIcon(s.dirs ?? []);
+        ic = makeStopIcon(dirs, isStation);
         iconCache.set(key, ic);
       }
       return ic;

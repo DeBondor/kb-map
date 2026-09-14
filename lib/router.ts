@@ -193,7 +193,14 @@ function approxDistMeters(lat1: number, lon1: number, lat2: number, lon2: number
 }
 
 function loadIndex(): RouterIndex | null {
-  const dir = config.GTFS_DIR;
+  let dir = config.GTFS_DIR;
+  if (!fs.existsSync(path.join(dir, "stops.txt"))) {
+    const fixtureDir = path.join(process.cwd(), "test", "fixtures", "gtfs");
+    if (fs.existsSync(path.join(fixtureDir, "stops.txt"))) {
+      dir = fixtureDir;
+    }
+  }
+
   let stopsTxt: string;
   let tripsTxt: string;
   let timesTxt: string;

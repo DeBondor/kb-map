@@ -41,29 +41,54 @@ export function makeVehicleIcon(line: string, color: string, bearing: number | n
   });
 }
 
-/** Bus glyph (boxy body, window band, two wheels) — matches the search results. */
-const BUS_SVG =
+/** Bus stop glyph — clean transit bus symbol in a rounded badge. */
+const STOP_BUS_SVG =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-  '<rect x="3" y="4.5" width="18" height="11" rx="2.5"/>' +
-  '<path d="M3 10.5h18M8 4.5v6M12 4.5v6M16 4.5v6"/>' +
-  '<circle cx="7.5" cy="16.6" r="1.4" fill="currentColor" stroke="none"/>' +
-  '<circle cx="16.5" cy="16.6" r="1.4" fill="currentColor" stroke="none"/></svg>';
+  '<rect x="4" y="4" width="16" height="12" rx="2.5"/>' +
+  '<path d="M4 10h16M8 4v6M16 4v6"/>' +
+  '<circle cx="7.5" cy="15.5" r="1.3" fill="currentColor" stroke="none"/>' +
+  '<circle cx="16.5" cy="15.5" r="1.3" fill="currentColor" stroke="none"/></svg>';
+
+/** Bus station (D.A.) glyph — terminal hub building icon. */
+const STATION_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M3 21h18M5 21V8l7-4 7 4v13"/>' +
+  '<path d="M9 13h6M9 17h6"/>' +
+  '<circle cx="12" cy="7.5" r="1" fill="currentColor" stroke="none"/></svg>';
+
+/** Road direction arrow — crisp navigation chevron flush against the stop disc rim. */
+const STOP_ARROW_SVG =
+  '<svg class="stop-arrow-svg" viewBox="0 0 12 8" aria-hidden="true">' +
+  '<path d="M6 1 L10.5 7 L6 5.5 L1.5 7 Z" fill="currentColor"/>' +
+  '</svg>';
 
 /**
- * A bus-stop marker for the higher-zoom map: a small bus sign plus one arrow per
- * GTFS-derived travel direction (`dirs`, compass degrees). Each arrow sits on
- * the sign's rim pointing the way buses leave — two arrows for a both-ways stop.
+ * Modern bus-stop marker designed for both dark and light map styles.
+ * - Regular stops: a sleek circular disc (dark surface + crisp white border)
+ *   with one or two route-tangent arrows pointing along the road direction.
+ * - Bus stations (D.A.): distinctive brand-red hub badge with terminal glyph
+ *   and NO directional arrows (multi-directional hub).
  */
-export function makeStopIcon(dirs: number[] = []): L.DivIcon {
+export function makeStopIcon(dirs: number[] = [], isStation = false): L.DivIcon {
+  if (isStation) {
+    return L.divIcon({
+      className: "stop-mk-icon",
+      html: `<div class="stop-mk is-station"><span class="stop-mk-sign stop-mk-station" title="Dworzec Autobusowy">${STATION_SVG}</span></div>`,
+      iconSize: [34, 34],
+      iconAnchor: [17, 17],
+    });
+  }
+
   const arrows = dirs
     .map(
       (d) =>
-        `<span class="stop-dir" style="transform:rotate(${d}deg)"><span class="stop-dir-a"></span></span>`,
+        `<span class="stop-dir" style="transform:rotate(${d}deg)"><span class="stop-dir-ptr">${STOP_ARROW_SVG}</span></span>`,
     )
     .join("");
+
   return L.divIcon({
     className: "stop-mk-icon",
-    html: `<div class="stop-mk">${arrows}<span class="stop-mk-sign">${BUS_SVG}</span></div>`,
+    html: `<div class="stop-mk">${arrows}<span class="stop-mk-sign">${STOP_BUS_SVG}</span></div>`,
     iconSize: [34, 34],
     iconAnchor: [17, 17],
   });
