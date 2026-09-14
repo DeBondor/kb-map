@@ -80,7 +80,7 @@ export default function BottomSheet({
     id: number;
     y: number;
     t: number;
-    base: number;
+    startH: number;
     target: HTMLElement | null;
   } | null>(null);
   const movesRef = useRef<{ y: number; t: number }[]>([]);
@@ -102,41 +102,21 @@ export default function BottomSheet({
 
   const vh = () => (typeof window !== "undefined" ? window.innerHeight : 800);
 
-  /** translateY (px) that leaves the chosen snap showing */
-  const baseY = useCallback((s: Snap) => {
-    const h = vh();
-    if (s === "full") return 0;
-    if (s === "half") return (FULL - HALF) * h;
-    // peek: ensure at least ~156px is visible (header + delay + badges) on smaller screens
-    const peekVisibleH = Math.max(PEEK * h, Math.min(156, FULL * h - 20));
-    return FULL * h - peekVisibleH;
-  }, []);
+  const SNAP_HEIGHTS: Record<Snap, string> = {
+    full: `${FULL * 100}dvh`,
+    half: `${HALF * 100}dvh`,
+    peek: `${PEEK * 100}dvh`,
+  };
 
   // Entrance transition on mount
   useEffect(() => {
     if (desktop) return;
     snapRef.current = initialSnap;
-    currentYRef.current = baseY(initialSnap);
     const raf = requestAnimationFrame(() => {
       setMounted(true);
     });
     return () => cancelAnimationFrame(raf);
-  }, [desktop, initialSnap, baseY]);
-
-  // Window resize handler
-  useEffect(() => {
-    if (desktop) return;
-    const onResize = () => {
-      if (isDraggingRef.current) return;
-      const target = baseY(snapRef.current);
-      currentYRef.current = target;
-      if (sheetRef.current) {
-        sheetRef.current.style.transform = `translate3d(0, ${target}px, 0)`;
-      }
-    };
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [desktop, baseY]);
+  }, [desktop, initialSnap]);
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
@@ -152,7 +132,7 @@ export default function BottomSheet({
         id: e.pointerId,
         y: e.clientY,
         t: e.timeStamp,
-        base: currentYRef.current || baseY(snapRef.current),
+        startH: sheetRef.current?.offsetHeight ?? (HALF * vh()),
         target: e.target as HTMLElement,
       };
       movesRef.current = [{ y: e.clientY, t: e.timeStamp }];
@@ -160,7 +140,7 @@ export default function BottomSheet({
       setIsDragging(true);
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     },
-    [desktop, baseY],
+    [desktop],
   );
 
   const onPointerMove = useCallback(
@@ -176,26 +156,23 @@ export default function BottomSheet({
       }
 
       const dy = e.clientY - st.y;
-      const rawY = st.base + dy;
-      const fullY = baseY("full");
-      const peekY = baseY("peek");
-      const h = vh();
+      // Dragging up (dy < 0) increases height; dragging down (dy > 0) decreases height
+      let h = st.startH - dy;
+      const v = vh();
+      const maxH = FULL * v;
+      const minH = PEEK * v;
 
-      let y = rawY;
-      if (rawY < fullY) {
-        // Rubberband resistance above 3/4
-        y = fullY + rubberband(rawY - fullY, h, 0.45);
-      } else if (rawY > peekY) {
-        // Rubberband resistance below peek
-        y = peekY + rubberband(rawY - peekY, h, 0.45);
+      if (h > maxH) {
+        h = maxH + rubberband(h - maxH, v, 0.4);
+      } else if (h < minH) {
+        h = minH - rubberband(minH - h, v, 0.4);
       }
 
-      currentYRef.current = y;
       if (sheetRef.current) {
-        sheetRef.current.style.transform = `translate3d(0, ${y}px, 0)`;
+        sheetRef.current.style.height = `${h}px`;
       }
     },
-    [baseY],
+    [],
   );
 
   const onPointerUp = useCallback(
@@ -218,10 +195,9 @@ export default function BottomSheet({
           else nextSnap = "half";
 
           snapRef.current = nextSnap;
-          currentYRef.current = baseY(nextSnap);
           if (sheetRef.current) {
-            sheetRef.current.style.transition = "transform 0.38s var(--ease-spring)";
-            sheetRef.current.style.transform = `translate3d(0, ${baseY(nextSnap)}px, 0)`;
+            sheetRef.current.style.transition = "height 0.35s var(--ease-spring)";
+            sheetRef.current.style.height = SNAP_HEIGHTS[nextSnap];
           }
           setSnap(nextSnap);
           return;
@@ -241,46 +217,40 @@ export default function BottomSheet({
         }
       }
 
-      // Momentum projection using Apple formula
-      const curY = currentYRef.current;
-      const projected = curY + (releaseVel / 1000) * 120;
-      const peekY = baseY("peek");
+      const curH = sheetRef.current?.offsetHeight ?? (HALF * vh());
+      const projectedH = curH - (releaseVel / 1000) * 120;
+      const v = vh();
 
       // Optional explicit swipe-to-dismiss (only if enabled & swiping fast past peek)
-      if (dismissOnDrag && projected > peekY + 120 && releaseVel > 900) {
+      if (dismissOnDrag && projectedH < PEEK * v - 80 && releaseVel > 900) {
         if (sheetRef.current) {
           sheetRef.current.style.transition = "transform 0.28s ease-in";
-          sheetRef.current.style.transform = `translate3d(0, ${FULL * vh()}px, 0)`;
+          sheetRef.current.style.transform = "translate3d(0, 100%, 0)";
         }
         setTimeout(onClose, 280);
         return;
       }
 
-      // Find nearest snap point to projected landing position
       let nearest: Snap = "half";
-      let bestDist = Infinity;
-      for (const s of SNAPS) {
-        const dist = Math.abs(projected - baseY(s));
-        if (dist < bestDist) {
-          bestDist = dist;
-          nearest = s;
-        }
-      }
+      const fullThreshold = ((FULL + HALF) / 2) * v;
+      const halfThreshold = ((HALF + PEEK) / 2) * v;
 
-      // Downward drag clamps to peek ("przyczepianie się na dole", never closes!)
-      if (projected >= peekY) {
+      if (projectedH >= fullThreshold) {
+        nearest = "full";
+      } else if (projectedH <= halfThreshold) {
         nearest = "peek";
+      } else {
+        nearest = "half";
       }
 
       snapRef.current = nearest;
-      currentYRef.current = baseY(nearest);
       if (sheetRef.current) {
-        sheetRef.current.style.transition = "transform 0.38s var(--ease-spring)";
-        sheetRef.current.style.transform = `translate3d(0, ${baseY(nearest)}px, 0)`;
+        sheetRef.current.style.transition = "height 0.35s var(--ease-spring)";
+        sheetRef.current.style.height = SNAP_HEIGHTS[nearest];
       }
       setSnap(nearest);
     },
-    [baseY, dismissOnDrag, onClose],
+    [dismissOnDrag, onClose],
   );
 
   const onPointerCancel = useCallback(
@@ -291,11 +261,11 @@ export default function BottomSheet({
       isDraggingRef.current = false;
       setIsDragging(false);
       if (sheetRef.current) {
-        sheetRef.current.style.transition = "transform 0.38s var(--ease-spring)";
-        sheetRef.current.style.transform = `translate3d(0, ${baseY(snapRef.current)}px, 0)`;
+        sheetRef.current.style.transition = "height 0.35s var(--ease-spring)";
+        sheetRef.current.style.height = SNAP_HEIGHTS[snapRef.current];
       }
     },
-    [baseY],
+    [],
   );
 
   if (desktop) {
@@ -330,12 +300,12 @@ export default function BottomSheet({
         isDragging ? "select-none" : ""
       }`}
       style={{
-        height: `${FULL * 100}dvh`,
-        transform: isDragging
-          ? undefined
-          : `translate3d(0, ${mounted ? baseY(snap) : FULL * vh()}px, 0)`,
-        transition: isDragging ? "none" : "transform 0.38s var(--ease-spring)",
-        willChange: isDragging ? "transform" : undefined,
+        height: isDragging ? undefined : SNAP_HEIGHTS[snap],
+        transform: mounted ? "none" : "translate3d(0, 100%, 0)",
+        transition: isDragging
+          ? "none"
+          : "transform 0.35s var(--ease-spring), height 0.35s var(--ease-spring)",
+        willChange: isDragging ? "height" : undefined,
         boxShadow: "var(--shadow-sheet)",
       }}
     >
@@ -353,14 +323,7 @@ export default function BottomSheet({
         </div>
         {header}
       </div>
-      <div
-        className="relative min-h-0 flex-1 overflow-hidden"
-        style={{
-          touchAction: "pan-y",
-          paddingBottom: `${baseY(snap)}px`,
-          transition: isDragging ? "none" : "padding-bottom 0.38s var(--ease-spring)",
-        }}
-      >
+      <div className="relative min-h-0 flex-1 overflow-hidden" style={{ touchAction: "pan-y" }}>
         <div
           className="pointer-events-none absolute inset-x-0 top-0 z-10 h-3 bg-gradient-to-b from-surface to-transparent"
           aria-hidden

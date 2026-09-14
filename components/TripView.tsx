@@ -162,7 +162,7 @@ function TripView({
   /* keep the vehicle's current stop in view; re-runs as the live stop advances */
   useEffect(() => {
     if (vti == null || trip.status === "loading") return;
-    currentRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    currentRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [vti, trip.status, trip.gen]);
 
   const direction = trip.direction || vehMeta?.headsign || "";
