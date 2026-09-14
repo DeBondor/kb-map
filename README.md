@@ -15,15 +15,15 @@ Real-time bus tracking, GTFS / GTFS-RT feed generator, and multi-leg transit jou
 
 Official passenger portals only show departures one stop at a time. **kb-map** tracks the entire fleet at once: real-time vehicle positions with live delays on an interactive vector map, an automated GTFS / GTFS-RT feed generator, and a journey planner that computes direct and multi-leg transfers across 950+ stops.
 
-Built with **Next.js 16**, **TypeScript**, and **Leaflet / MapLibre GL**. A background poller runs concurrently in the same Node.js process via `instrumentation.ts` — no separate scraper daemon required.
+Built with **Next.js 16**, **TypeScript**, and **Leaflet / MapLibre GL**. A background poller runs concurrently in the same Node.js process via `instrumentation.ts` without requiring a separate scraper daemon.
 
 ## Features
 
-- **Live Fleet Tracking** — Real-time GPS locations of all running buses updated every 4 s. Headings are computed from actual physical movement (with jitter filtering), with live delay badges (`+4 min`) and active stop progress tracking.
-- **Multi-leg Journey Planner** — Connection search supporting direct trips and multi-leg transfers with automatic walkable hub transfers (up to 350 m between platforms or opposite street sides). Fuzzy stop resolution handles Polish diacritics, punctuation (`PIETRZYKOWICE, KOŚCIÓŁ`), and street suffixes seamlessly across calendar boundaries.
-- **GTFS & GTFS-Realtime Feeds** — Automatic nightly builds of static multi-day GTFS (`stops`, `routes`, `trips`, `stop_times`, `shapes`, `calendar`) published atomically, plus standard GTFS-RT `VehiclePositions` protobuf at `/api/gtfs-rt.pb`.
-- **Interactive UI & PWA** — Vector base map (OpenFreeMap with dark mode and raster fallback), stop departures boards with live countdowns, route timeline sheets with OSRM road geometry, keyboard command palette (`Cmd/Ctrl+K`), and installable PWA support.
-- **Self-Healing Poller** — 3-tier polling architecture (full scan every 180 s, smart scan every 60 s, active vehicle refresh every 15 s) with on-demand candidate discovery, ghost vehicle filtering, and health monitoring (`/api/health`).
+- **Live Fleet Tracking**: Real-time GPS locations of all running buses updated every 4 s. Headings are computed from actual physical movement (with jitter filtering), with live delay badges (`+4 min`) and active stop progress tracking.
+- **Multi-leg Journey Planner**: Connection search supporting direct trips and multi-leg transfers with automatic walkable hub transfers (up to 350 m between platforms or opposite street sides). Fuzzy stop resolution handles Polish diacritics, punctuation (`PIETRZYKOWICE, KOŚCIÓŁ`), and street suffixes seamlessly across calendar boundaries.
+- **GTFS & GTFS-Realtime Feeds**: Automatic nightly builds of static multi-day GTFS (`stops`, `routes`, `trips`, `stop_times`, `shapes`, `calendar`) published atomically, plus standard GTFS-RT `VehiclePositions` protobuf at `/api/gtfs-rt.pb`.
+- **Interactive UI & PWA**: Vector base map (OpenFreeMap with dark mode and raster fallback), stop departures boards with live countdowns, route timeline sheets with OSRM road geometry, keyboard command palette (`Cmd/Ctrl+K`), and installable PWA support.
+- **Self-Healing Poller**: 3-tier polling architecture (full scan every 180 s, smart scan every 60 s, active vehicle refresh every 15 s) with on-demand candidate discovery, ghost vehicle filtering, and health monitoring (`/api/health`).
 
 ## Quick Start
 
