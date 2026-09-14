@@ -88,6 +88,34 @@ function weekdayMonday0(date: string): number {
   return (dt.getUTCDay() + 6) % 7;
 }
 
+function getServiceDates(refDate: string): { weekdayDate: string; saturdayDate: string; sundayDate: string } {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(refDate);
+  if (!m) throw new Error(`invalid date: ${refDate} (expected YYYY-MM-DD)`);
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  const dow = dt.getUTCDay(); // 0 = Sun, 1 = Mon, ..., 6 = Sat
+
+  let daysToMon = 1 - dow;
+  let daysToSat = 6 - dow;
+  let daysToSun = 7 - dow;
+  if (dow === 0) {
+    daysToMon = 1;
+    daysToSat = 6;
+    daysToSun = 0;
+  }
+
+  const toIso = (offset: number): string => {
+    const target = new Date(dt.getTime() + offset * 86400_000);
+    return target.toISOString().slice(0, 10);
+  };
+
+  return {
+    weekdayDate: toIso(daysToMon),
+    saturdayDate: toIso(daysToSat),
+    sundayDate: toIso(daysToSun),
+  };
+}
+
 /** Port of _write_gtfs: same files, column orders and values. */
 function writeGtfs(
   outDir: string,
@@ -96,14 +124,10 @@ function writeGtfs(
   trips: Row[],
   stopTimes: Row[],
   shapes: Row[],
+  calendar: Row[],
   date: string,
 ): void {
   const dateCompact = date.replace(/-/g, "");
-  const weekday = weekdayMonday0(date);
-  const flags: Row = {};
-  WEEKDAY_FIELDS.forEach((f, i) => {
-    flags[f] = i === weekday ? "1" : "0";
-  });
 
   writeCsv(path.join(outDir, "agency.txt"), ["agency_id", "agency_name", "agency_url", "agency_timezone", "agency_lang"], [
     {
@@ -156,9 +180,7 @@ function writeGtfs(
     stopTimes,
   );
 
-  writeCsv(path.join(outDir, "calendar.txt"), ["service_id", ...WEEKDAY_FIELDS, "start_date", "end_date"], [
-    { service_id: "KB_" + dateCompact, ...flags, start_date: dateCompact, end_date: dateCompact },
-  ]);
+  writeCsv(path.join(outDir, "calendar.txt"), ["service_id", ...WEEKDAY_FIELDS, "start_date", "end_date"], calendar);
 
   writeCsv(
     path.join(outDir, "shapes.txt"),
@@ -175,15 +197,27 @@ function writeGtfs(
         feed_publisher_url: config.AGENCY_URL,
         feed_lang: config.AGENCY_LANG,
         feed_start_date: dateCompact,
-        feed_end_date: dateCompact,
+        feed_end_date: "20261231",
         feed_version: `KB-GTFS ${date}`,
       },
     ],
   );
 }
 
+interface ServiceConfig {
+  id: string;
+  date: string;
+  days: Record<typeof WEEKDAY_FIELDS[number], number>;
+}
+
 /** Port of build(): fetch stops + timetables + trips, emit GTFS files. */
-async function build(date: string, outDir: string, concurrency: number, doZip: boolean): Promise<void> {
+async function build(
+  date: string,
+  outDir: string,
+  concurrency: number,
+  doZip: boolean,
+  fullSchedule: boolean,
+): Promise<void> {
   // validate early, like Python's dt.date.fromisoformat in _write_gtfs
   weekdayMonday0(date);
   // Build into a temp sibling and swap in at the end, so a mid-build failure
@@ -194,7 +228,7 @@ async function build(date: string, outDir: string, concurrency: number, doZip: b
   fs.rmSync(tmpDir, { recursive: true, force: true });
   fs.mkdirSync(tmpDir, { recursive: true });
   try {
-    await buildInto(date, tmpDir, concurrency, doZip);
+    await buildInto(date, tmpDir, concurrency, doZip, fullSchedule);
   } catch (err) {
     fs.rmSync(tmpDir, { recursive: true, force: true });
     throw err;
@@ -215,7 +249,13 @@ async function build(date: string, outDir: string, concurrency: number, doZip: b
   console.log(`[gtfs] published feed to ${finalDir}`);
 }
 
-async function buildInto(date: string, outDir: string, concurrency: number, doZip: boolean): Promise<void> {
+async function buildInto(
+  date: string,
+  outDir: string,
+  concurrency: number,
+  doZip: boolean,
+  fullSchedule: boolean,
+): Promise<void> {
   const api = new KbApi({ concurrency });
   const rev = await api.fetchRevision();
   console.log(`[gtfs] stops revision: ${rev}`);
@@ -225,24 +265,71 @@ async function buildInto(date: string, outDir: string, concurrency: number, doZi
   const stopByUrl = new Map(stops.map((s) => [s.urlId, s]));
   const stopById = new Map(stops.map((s) => [s.internalId, s]));
 
-  console.log(`[gtfs] fetching timetables for ${stops.length} stops on ${date} ...`);
-  const results = await api.fetchMany((s: Stop) => api.fetchTimetable(s.urlId, date), stops);
+  const services: ServiceConfig[] = fullSchedule
+    ? (() => {
+        const { weekdayDate, saturdayDate, sundayDate } = getServiceDates(date);
+        return [
+          {
+            id: "KB_WEEKDAY",
+            date: weekdayDate,
+            days: { monday: 1, tuesday: 1, wednesday: 1, thursday: 1, friday: 1, saturday: 0, sunday: 0 },
+          },
+          {
+            id: "KB_SATURDAY",
+            date: saturdayDate,
+            days: { monday: 0, tuesday: 0, wednesday: 0, thursday: 0, friday: 0, saturday: 1, sunday: 0 },
+          },
+          {
+            id: "KB_SUNDAY",
+            date: sundayDate,
+            days: { monday: 0, tuesday: 0, wednesday: 0, thursday: 0, friday: 0, saturday: 0, sunday: 1 },
+          },
+        ];
+      })()
+    : (() => {
+        const weekday = weekdayMonday0(date);
+        const flags: Record<typeof WEEKDAY_FIELDS[number], number> = {
+          monday: 0,
+          tuesday: 0,
+          wednesday: 0,
+          thursday: 0,
+          friday: 0,
+          saturday: 0,
+          sunday: 0,
+        };
+        WEEKDAY_FIELDS.forEach((f, i) => {
+          flags[f] = i === weekday ? 1 : 0;
+        });
+        return [{ id: "KB_" + date.replace(/-/g, ""), date, days: flags }];
+      })();
 
-  const tripIds = new Set<string>();
-  for (const [, tt] of results) {
-    if (!pyTruthy(tt)) continue;
-    const departures = (tt as Record<string, unknown>).departures;
-    if (!Array.isArray(departures)) continue;
-    for (const dep of departures) {
-      if (dep === null || typeof dep !== "object") continue;
-      const tid = (dep as Record<string, unknown>).trip_id;
-      if (tid !== null && tid !== undefined) tripIds.add(String(tid));
+  const tripToServices = new Map<string, Set<string>>();
+  for (const svc of services) {
+    console.log(`[gtfs] fetching timetables for ${svc.id} (${svc.date}) ...`);
+    const results = await api.fetchMany((s: Stop) => api.fetchTimetable(s.urlId, svc.date), stops);
+    for (const [, tt] of results) {
+      if (!pyTruthy(tt)) continue;
+      const departures = (tt as Record<string, unknown>).departures;
+      if (!Array.isArray(departures)) continue;
+      for (const dep of departures) {
+        if (dep === null || typeof dep !== "object") continue;
+        const tid = (dep as Record<string, unknown>).trip_id;
+        if (tid !== null && tid !== undefined) {
+          const tidStr = String(tid);
+          let set = tripToServices.get(tidStr);
+          if (!set) {
+            set = new Set();
+            tripToServices.set(tidStr, set);
+          }
+          set.add(svc.id);
+        }
+      }
     }
   }
-  console.log(`[gtfs] discovered ${tripIds.size} unique trips`);
+  console.log(`[gtfs] discovered ${tripToServices.size} unique trips across all services`);
 
   console.log(`[gtfs] fetching trip details ...`);
-  const tripResults = await api.fetchMany((t: string) => api.fetchTrip(t, 0), [...tripIds].sort());
+  const tripResults = await api.fetchMany((t: string) => api.fetchTrip(t, 0), [...tripToServices.keys()].sort());
 
   const routes = new Map<string, Row>();
   const shapesRows: Row[] = [];
@@ -310,49 +397,107 @@ async function buildInto(date: string, outDir: string, concurrency: number, doZi
       }
     });
 
-    tripsRows.push({
-      route_id: routeId,
-      service_id: "KB_" + date.replace(/-/g, ""),
-      trip_id: trip.tripId,
-      trip_headsign: compact(trip.direction),
-      trip_short_name: trip.showName ? trip.lineName : "",
-      direction_id: "",
-      shape_id: shapeId,
-    });
+    const svcs = tripToServices.get(trip.tripId);
+    const svcList = svcs && svcs.size > 0 ? [...svcs] : [services[0].id];
+    for (const svcId of svcList) {
+      tripsRows.push({
+        route_id: routeId,
+        service_id: svcId,
+        trip_id: svcList.length > 1 ? `${trip.tripId}_${svcId}` : trip.tripId,
+        raw_trip_id: trip.tripId,
+        trip_headsign: compact(trip.direction),
+        trip_short_name: trip.showName ? trip.lineName : "",
+        direction_id: "",
+        shape_id: shapeId,
+      });
+    }
   }
 
-  writeGtfs(outDir, stops, routes, tripsRows, stopTimesRows, shapesRows, date);
-  console.log(`[gtfs] wrote files to ${outDir}`);
-  console.log(`[gtfs] trips=${tripsRows.length} routes=${routes.size} stop_times=${stopTimesRows.length} shapes=${shapesRows.length}`);
+  const finalStopTimes: Row[] = [];
+  const multiMap = new Map<string, string[]>();
+  for (const t of tripsRows) {
+    const rawId = t.raw_trip_id as string | undefined;
+    if (rawId && t.trip_id !== rawId) {
+      let list = multiMap.get(rawId);
+      if (!list) {
+        list = [];
+        multiMap.set(rawId, list);
+      }
+      list.push(t.trip_id as string);
+    }
+  }
+  for (const st of stopTimesRows) {
+    finalStopTimes.push(st);
+    const extra = multiMap.get(st.trip_id as string);
+    if (extra) {
+      for (const eid of extra) {
+        finalStopTimes.push({ ...st, trip_id: eid });
+      }
+    }
+  }
+
+  const calendarRows: Row[] = services.map((s) => ({
+    service_id: s.id,
+    monday: s.days.monday,
+    tuesday: s.days.tuesday,
+    wednesday: s.days.wednesday,
+    thursday: s.days.thursday,
+    friday: s.days.friday,
+    saturday: s.days.saturday,
+    sunday: s.days.sunday,
+    start_date: "20260101",
+    end_date: "20261231",
+  }));
+
+  // Write to a temporary directory first so readers never see half-written feeds
+  const tmpDir = path.join(path.dirname(outDir), `.gtfs_tmp_${Date.now()}`);
+  fs.mkdirSync(tmpDir, { recursive: true });
+
+  writeGtfs(tmpDir, stops, routes, tripsRows, finalStopTimes, shapesRows, calendarRows, date);
 
   if (doZip) {
-    const zp = path.join(outDir, "kb_gtfs.zip");
+    const zp = path.join(tmpDir, "kb_gtfs.zip");
     const files: Record<string, Uint8Array> = {};
-    for (const name of fs.readdirSync(outDir)) {
-      if (name.endsWith(".txt")) files[name] = new Uint8Array(fs.readFileSync(path.join(outDir, name)));
+    for (const name of fs.readdirSync(tmpDir)) {
+      if (name.endsWith(".txt")) files[name] = new Uint8Array(fs.readFileSync(path.join(tmpDir, name)));
     }
     fs.writeFileSync(zp, zipSync(files, { level: 6 }));
-    console.log(`[gtfs] wrote ${zp}`);
   }
+
+  // Atomically publish files into outDir
+  fs.mkdirSync(outDir, { recursive: true });
+  for (const name of fs.readdirSync(tmpDir)) {
+    fs.copyFileSync(path.join(tmpDir, name), path.join(outDir, name));
+  }
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+
+  console.log(`[gtfs] wrote files to ${outDir}`);
+  console.log(`[gtfs] trips=${tripsRows.length} routes=${routes.size} stop_times=${finalStopTimes.length} shapes=${shapesRows.length}`);
 }
 
 export interface BuildGtfsOptions {
-  /** YYYY-MM-DD; defaults to today in the agency timezone. */
+  /** YYYY-MM-DD reference date; defaults to today in the agency timezone. */
   date?: string;
   /** Defaults to config.GTFS_DIR. */
   outDir?: string;
   concurrency?: number;
   /** Also write kb_gtfs.zip (default true). */
   zip?: boolean;
+  /**
+   * If true (default), builds all services (weekday, saturday, sunday).
+   * If false, builds a single-day feed for the given date.
+   */
+  fullSchedule?: boolean;
 }
 
-/** Build and atomically publish a single-day feed. */
+/** Build and atomically publish a GTFS feed. */
 export async function buildGtfs(opts: BuildGtfsOptions = {}): Promise<void> {
   await build(
     opts.date ?? config.todayLocalISO(),
     opts.outDir ?? config.GTFS_DIR,
     opts.concurrency ?? config.DEFAULT_CONCURRENCY,
     opts.zip ?? true,
+    opts.fullSchedule ?? true,
   );
 }
 

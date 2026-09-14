@@ -19,6 +19,7 @@ function main(): void {
       concurrency: { type: "string", default: String(config.DEFAULT_CONCURRENCY) },
       zip: { type: "boolean", default: true },
       "no-zip": { type: "boolean", default: false },
+      "single-day": { type: "boolean", default: false },
     },
   });
   const doZip = values["no-zip"] ? false : Boolean(values.zip);
@@ -26,8 +27,15 @@ function main(): void {
   const concurrency = Number.isFinite(concurrencyNum) && concurrencyNum > 0
     ? Math.trunc(concurrencyNum)
     : config.DEFAULT_CONCURRENCY;
+  const fullSchedule = !values["single-day"];
 
-  buildGtfs({ date: values.date as string, outDir: values.out as string, concurrency, zip: doZip }).catch(
+  buildGtfs({
+    date: values.date as string,
+    outDir: values.out as string,
+    concurrency,
+    zip: doZip,
+    fullSchedule,
+  }).catch(
     (err: unknown) => {
       console.error(`[gtfs] fatal: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
       process.exit(1);

@@ -42,14 +42,14 @@ export const DEFAULT_CONCURRENCY = envInt("KB_CONCURRENCY", 40);
 export const RATE_LIMIT_GLOBAL = envInt("KB_RATE_LIMIT_GLOBAL", 500);
 
 /** Live poller tuning (all in seconds unless noted). */
-export const LIVE_FULL_SCAN_INTERVAL = envInt("KB_SCAN_INTERVAL", 180);
-export const LIVE_REFRESH_INTERVAL = envInt("KB_REFRESH_INTERVAL", 15);
+export const LIVE_FULL_SCAN_INTERVAL = envInt("KB_SCAN_INTERVAL", 90);
+export const LIVE_REFRESH_INTERVAL = envInt("KB_REFRESH_INTERVAL", 10);
 export const LIVE_CANDIDATE_HORIZON_SEC = envInt("KB_CANDIDATE_HORIZON", 7200);
-export const LIVE_404_CACHE_SEC = envInt("KB_404_CACHE", 240, 0);
-export const LIVE_STOP_EMPTY_CACHE_SEC = envInt("KB_STOP_EMPTY_CACHE", 600, 0);
-export const LIVE_STOP_FAR_CACHE_SEC = envInt("KB_STOP_FAR_CACHE", 300, 0);
+export const LIVE_404_CACHE_SEC = envInt("KB_404_CACHE", 30, 0);
+export const LIVE_STOP_EMPTY_CACHE_SEC = envInt("KB_STOP_EMPTY_CACHE", 120, 0);
+export const LIVE_STOP_FAR_CACHE_SEC = envInt("KB_STOP_FAR_CACHE", 180, 0);
 export const LIVE_STOP_FAR_THRESHOLD_SEC = envInt("KB_STOP_FAR_THRESHOLD", 1800);
-export const LIVE_SMART_SCAN_INTERVAL = envInt("KB_SMART_SCAN_INTERVAL", 60);
+export const LIVE_SMART_SCAN_INTERVAL = envInt("KB_SMART_SCAN_INTERVAL", 30);
 export const LIVE_SMART_SCAN_WINDOW_SEC = envInt("KB_SMART_SCAN_WINDOW", 600, 0);
 /**
  * Max stops per departures request. The upstream silently caps every
