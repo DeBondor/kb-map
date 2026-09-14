@@ -24,13 +24,12 @@ import type {
 } from "@/lib/client/types";
 import { useGeolocation, useIsDesktop, useStops, useVehicles } from "@/components/hooks";
 import AnnouncementsSheet from "@/components/AnnouncementsSheet";
-import CommandPalette from "@/components/CommandPalette";
+import { type TopBarSearchHandle } from "@/components/TopBarSearch";
 import ConnectionsModal from "@/components/ConnectionsModal";
 import Toast from "@/components/Toast";
 import LineFilterChip from "@/components/LineFilterChip";
 import LocateButton from "@/components/LocateButton";
 import RouteButton from "@/components/RouteButton";
-import SearchButton from "@/components/SearchButton";
 import TopBar, { BASE_LAYERS, RASTER_FALLBACK, type BaseLayerId } from "@/components/TopBar";
 import StopView from "@/components/StopView";
 import TripPanel from "@/components/TripView";
@@ -110,8 +109,7 @@ export default function MapApp() {
     status: "loading",
     attempt: 0,
   });
-  const [paletteOpen, setPaletteOpen] = useState(false);
-  const [routeFromStop, setRouteFromStop] = useState<Stop | null>(null);
+  const searchRef = useRef<TopBarSearchHandle | null>(null);
   const [connModalOpen, setConnModalOpen] = useState(false);
   const [connInitialFrom, setConnInitialFrom] = useState<Stop | null>(null);
   const [annOpen, setAnnOpen] = useState(false);
@@ -389,7 +387,10 @@ export default function MapApp() {
 
   const handleFocusJourneyStop = useCallback((lat: number, lon: number) => {
     const m = mapRef.current;
-    if (m) m.flyTo([lat, lon], Math.max(m.getZoom(), 16), panMotion(0.9));
+    if (m) {
+      m.getContainer().classList.add("map-moving");
+      m.flyTo([lat, lon], Math.max(m.getZoom(), 16), panMotion(0.9));
+    }
   }, []);
 
   const handleSelectStop = useCallback(
@@ -401,6 +402,7 @@ export default function MapApp() {
       setSelectedStop(s);
       if (opts?.fly && mapRef.current) {
         const m = mapRef.current;
+        m.getContainer().classList.add("map-moving");
         m.flyTo([s.lat, s.lon], Math.max(m.getZoom(), 16), panMotion(1.1));
       }
     },
@@ -411,11 +413,9 @@ export default function MapApp() {
   const toggleStops = useCallback(() => setStopsVisible((v) => !v), []);
   const pickStopFly = useCallback((s: Stop) => handleSelectStop(s, { fly: true }), [handleSelectStop]);
 
-  /* command palette */
-  const openPalette = useCallback(() => setPaletteOpen(true), []);
-  const closePalette = useCallback(() => {
-    setPaletteOpen(false);
-    setRouteFromStop(null);
+  /* search bar focus handle */
+  const handleFocusSearch = useCallback(() => {
+    searchRef.current?.focus();
   }, []);
 
   /* connections modal ("Wyszukaj połączenie") */
@@ -698,7 +698,10 @@ export default function MapApp() {
   /* fly to a stop tapped on the trip timeline (does not change selection) */
   const handleFocusStop = useCallback((s: Stop) => {
     const m = mapRef.current;
-    if (m) m.flyTo([s.lat, s.lon], Math.max(m.getZoom(), 15), panMotion(0.9));
+    if (m) {
+      m.getContainer().classList.add("map-moving");
+      m.flyTo([s.lat, s.lon], Math.max(m.getZoom(), 15), panMotion(0.9));
+    }
   }, []);
 
   const handleMap = useCallback((m: L.Map) => {
@@ -706,6 +709,28 @@ export default function MapApp() {
     // guard against a 0×0 container at mount (dvh reflow on mobile): re-measure
     // once layout settles so the GL canvas isn't sized from an empty box
     requestAnimationFrame(() => m.invalidateSize(false));
+
+    // Freeze CSS transitions on markers while the map is moving, zooming or flying
+    // so vehicle markers don't slide or drift relative to stops or geography
+    const container = m.getContainer();
+    let moveEndTimer: ReturnType<typeof setTimeout> | null = null;
+    const onMoveStart = () => {
+      if (moveEndTimer) clearTimeout(moveEndTimer);
+      container.classList.add("map-moving");
+    };
+    const onMoveEnd = () => {
+      if (moveEndTimer) clearTimeout(moveEndTimer);
+      moveEndTimer = setTimeout(() => {
+        container.classList.remove("map-moving");
+      }, 75);
+    };
+    m.on("movestart", onMoveStart);
+    m.on("zoomstart", onMoveStart);
+    m.on("zoomanim", onMoveStart);
+    m.on("move", onMoveStart);
+    m.on("moveend", onMoveEnd);
+    m.on("zoomend", onMoveEnd);
+
     // keep map= in the URL fresh — debounced replaceState over refs, zero React
     // renders (Safari throttles ~100 history calls/30 s, hence debounce + skip)
     let t: ReturnType<typeof setTimeout> | null = null;
@@ -725,7 +750,10 @@ export default function MapApp() {
   /* locate button: start (or reuse) the GPS watch and recenter on the fix */
   const flyToUser = useCallback((p: { lat: number; lon: number }) => {
     const m = mapRef.current;
-    if (m) m.flyTo([p.lat, p.lon], Math.max(m.getZoom(), 15), panMotion(1.1));
+    if (m) {
+      m.getContainer().classList.add("map-moving");
+      m.flyTo([p.lat, p.lon], Math.max(m.getZoom(), 15), panMotion(1.1));
+    }
   }, []);
 
   const handleLocate = useCallback(() => {
@@ -865,8 +893,18 @@ export default function MapApp() {
         onToggleStops={toggleStops}
         baseLayer={baseLayer}
         onBaseLayer={setBaseLayer}
-        onOpenPalette={openPalette}
         onOpenAnnouncements={openAnnouncements}
+        stops={stops}
+        geoPos={geo.pos}
+        onLocate={paletteLocate}
+        onPickStop={pickStopFly}
+        onPickVehicle={handleVehicleClick}
+        lineFilter={lineFilter}
+        onToggleLine={toggleLineFilter}
+        onClearLineFilter={clearLineFilter}
+        onClearView={handleClearView}
+        onOpenConnections={openConnModal}
+        searchRef={searchRef}
       />
 
       {filterLines && (
@@ -874,35 +912,11 @@ export default function MapApp() {
           lines={filterLines}
           visibleCount={lineFilter ? vehicles.filter((v) => lineFilter.has(v.line)).length : 0}
           onClear={clearLineFilter}
-          onOpenPalette={openPalette}
+          onOpenPalette={handleFocusSearch}
         />
       )}
 
-      <CommandPalette
-        open={paletteOpen}
-        onOpen={openPalette}
-        onClose={closePalette}
-        stops={stops}
-        geoPos={paletteOpen ? geo.pos : null}
-        geoStatus={geo.status}
-        onLocate={paletteLocate}
-        onEnsureGeo={geo.locate}
-        onPickStop={pickStopFly}
-        onPickVehicle={handleVehicleClick}
-        stopsVisible={stopsVisible}
-        onToggleStops={toggleStops}
-        onClearView={handleClearView}
-        baseLayer={baseLayer}
-        onBaseLayer={setBaseLayer}
-        lineFilter={lineFilter}
-        onToggleLine={toggleLineFilter}
-        onClearLineFilter={clearLineFilter}
-        initialRouteFrom={routeFromStop}
-        onOpenConnections={openConnModal}
-      />
-
       <LocateButton status={geo.status} onLocate={handleLocate} />
-      <SearchButton onSearch={openPalette} />
       <RouteButton onClick={openConnModal} />
 
       <ConnectionsModal

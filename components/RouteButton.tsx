@@ -27,7 +27,7 @@ function RouteButton({ onClick }: Props) {
       onClick={onClick}
       aria-label="Wyszukaj połączenie"
       title="Wyszukaj połączenie"
-      className="surface no-focus-ring absolute top-[calc(4.5rem+env(safe-area-inset-top,0px)+104px)] right-3 z-[1000] grid h-11 w-11 place-items-center rounded-full text-text-mute transition-all hover:text-text active:scale-90 md:top-auto md:bottom-[102px]"
+      className="surface no-focus-ring absolute top-[calc(4.5rem+env(safe-area-inset-top,0px)+52px)] right-3 z-[1000] grid h-11 w-11 place-items-center rounded-full text-text-mute transition-all hover:text-text active:scale-90 md:top-auto md:bottom-[154px]"
     >
       <RouteIcon />
     </button>

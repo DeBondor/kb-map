@@ -1,6 +1,7 @@
 "use client";
 
 import { memo, useEffect, useRef, useState } from "react";
+import TopBarSearch, { type TopBarSearchHandle } from "@/components/TopBarSearch";
 import { useAnnouncements } from "@/lib/client/announcements";
 import {
   BRAND,
@@ -8,6 +9,8 @@ import {
   COLOR_EARLY,
   COLOR_LATE,
 } from "@/lib/client/format";
+import type { GeoPos } from "@/components/hooks";
+import type { Stop, Vehicle } from "@/lib/client/types";
 
 export type BaseLayerId = "kb" | "dark";
 
@@ -30,16 +33,6 @@ export type BaseLayer =
 
 const OFM = (style: string) => `https://tiles.openfreemap.org/styles/${style}`;
 
-/* Base map: OpenFreeMap vector tiles — free, keyless and self-hostable, so the
- * map renders entirely on our own stack instead of depending on the upstream
- * kiedyprzyjedzie raster CDN. "liberty" keeps the same light OSM look (grey
- * streets, green parks, blue water, building footprints) the KB tiles had.
- * Other ready styles (re-add their ids to BaseLayerId to expose them):
- *   muted:    { kind: "vector", name: "Przygaszona", style: OFM("positron"),
- *              filter: "brightness(0.82) contrast(1.06) saturate(0.9)" },
- *   graphite: { kind: "vector", name: "Grafit", style: OFM("dark"),
- *              filter: "brightness(1.55) contrast(0.92)" },
- */
 export const BASE_LAYERS: Record<BaseLayerId, BaseLayer> = {
   kb: {
     kind: "vector",
@@ -53,9 +46,6 @@ export const BASE_LAYERS: Record<BaseLayerId, BaseLayer> = {
   },
 };
 
-/* When the OpenFreeMap style never loads (CDN down, captive portal, offline
- * PWA), MapApp swaps in a classic raster layer so the user never stares at a
- * blank void. Standard OpenStreetMap tiles are used without requiring any API key. */
 export const RASTER_FALLBACK: Record<BaseLayerId, { url: string; attribution: string; className?: string }> = {
   kb: {
     url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
@@ -70,22 +60,28 @@ export const RASTER_FALLBACK: Record<BaseLayerId, { url: string; attribution: st
   },
 };
 
-interface Props {
+export interface TopBarProps {
   count: number | null;
   offline: boolean;
   stopsVisible: boolean;
   onToggleStops: () => void;
   baseLayer: BaseLayerId;
   onBaseLayer: (id: BaseLayerId) => void;
-  /** opens the command palette — the bar's "input" is just a trigger */
-  onOpenPalette: () => void;
   /** opens the service-announcements sheet ("Utrudnienia") */
   onOpenAnnouncements: () => void;
+  // Search props
+  stops: Stop[];
+  geoPos: GeoPos | null;
+  onLocate: () => void;
+  onPickStop: (s: Stop) => void;
+  onPickVehicle: (v: Vehicle) => void;
+  lineFilter: ReadonlySet<string> | null;
+  onToggleLine: (line: string) => void;
+  onClearLineFilter: () => void;
+  onClearView: () => void;
+  onOpenConnections?: () => void;
+  searchRef?: React.RefObject<TopBarSearchHandle | null>;
 }
-
-/* ⌘K on Apple hardware, Ctrl K elsewhere (chip is decorative, hidden on touch) */
-const IS_MAC =
-  typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
 
 function LegendDot({ color, label }: { color: string; label: string }) {
   return (
@@ -103,9 +99,19 @@ function TopBar({
   onToggleStops,
   baseLayer,
   onBaseLayer,
-  onOpenPalette,
   onOpenAnnouncements,
-}: Props) {
+  stops,
+  geoPos,
+  onLocate,
+  onPickStop,
+  onPickVehicle,
+  lineFilter,
+  onToggleLine,
+  onClearLineFilter,
+  onClearView,
+  onOpenConnections,
+  searchRef,
+}: TopBarProps) {
   const [menu, setMenu] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   /* store notifies at most once per 15 min — no extra work in the 5 s cycle */
@@ -124,41 +130,32 @@ function TopBar({
   return (
     <div
       ref={rootRef}
-      className="absolute left-3 top-[max(0.75rem,env(safe-area-inset-top))] z-[1002] w-[min(400px,calc(100vw-24px))] md:left-1/2 md:-translate-x-1/2"
+      className="absolute left-3 top-[max(0.75rem,env(safe-area-inset-top))] z-[1002] w-[min(440px,calc(100vw-24px))] md:left-1/2 md:-translate-x-1/2"
     >
-      {/* search trigger — the real search lives in the command palette */}
-      <div className="surface flex h-12 items-center gap-2.5 rounded-full pl-4 pr-1.5">
-        <button
-          type="button"
-          onClick={() => {
-            setMenu(false);
-            onOpenPalette();
+      {/* Search pill with live inline search input */}
+      <div className="surface flex h-12 items-center gap-2 rounded-full pl-3.5 pr-1.5 shadow-lg">
+        <TopBarSearch
+          stops={stops}
+          geoPos={geoPos}
+          onLocate={onLocate}
+          onPickStop={onPickStop}
+          onPickVehicle={onPickVehicle}
+          lineFilter={lineFilter}
+          onToggleLine={onToggleLine}
+          onClearLineFilter={onClearLineFilter}
+          onToggleStops={onToggleStops}
+          stopsVisible={stopsVisible}
+          baseLayer={baseLayer}
+          onBaseLayer={onBaseLayer}
+          onClearView={onClearView}
+          onOpenConnections={onOpenConnections}
+          searchRef={searchRef}
+          onDropdownChange={(isOpen) => {
+            if (isOpen) setMenu(false);
           }}
-          aria-label="Szukaj przystanku lub linii"
-          className="flex h-full min-w-0 flex-1 items-center gap-2.5 text-left"
-        >
-          <svg
-            width="17"
-            height="17"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            className="shrink-0 text-text-faint"
-            aria-hidden
-          >
-            <circle cx="11" cy="11" r="7" />
-            <path d="m20 20-3.5-3.5" />
-          </svg>
-          <span className="min-w-0 flex-1 truncate text-[14px] text-text-faint">
-            <span className="hidden sm:inline">Szukaj przystanku lub linii…</span>
-            <span className="sm:hidden">Szukaj…</span>
-          </span>
-          <kbd className="mr-1 hidden shrink-0 items-center rounded bg-white/8 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-text-faint md:inline-flex">
-            {IS_MAC ? "⌘K" : "Ctrl K"}
-          </kbd>
-        </button>
+        />
+
+        {/* Online vehicles count badge */}
         <span
           className="flex shrink-0 items-center gap-1.5 rounded-full bg-white/8 px-2.5 py-1 text-xs font-bold tabular-nums text-text"
           title={offline ? "Brak połączenia" : "Pojazdy online"}
@@ -169,11 +166,14 @@ function TopBar({
           />
           {count ?? "…"}
         </span>
+
+        {/* Announcements button */}
         <button
           type="button"
           aria-label={unseen ? "Utrudnienia w ruchu (nowe komunikaty)" : "Utrudnienia w ruchu"}
           onClick={() => {
             setMenu(false);
+            searchRef?.current?.blur();
             onOpenAnnouncements();
           }}
           className="relative grid h-11 w-11 shrink-0 place-items-center rounded-full text-text-mute transition-colors hover:bg-white/8 hover:text-text md:h-9 md:w-9"
@@ -189,11 +189,16 @@ function TopBar({
             />
           )}
         </button>
+
+        {/* Map settings button */}
         <button
           type="button"
           aria-label="Ustawienia mapy"
           aria-expanded={menu}
-          onClick={() => setMenu((v) => !v)}
+          onClick={() => {
+            setMenu((v) => !v);
+            searchRef?.current?.blur();
+          }}
           className={`grid h-11 w-11 shrink-0 place-items-center rounded-full transition-colors md:h-9 md:w-9 ${
             menu ? "bg-primary-dim text-primary" : "text-text-mute hover:bg-white/8 hover:text-text"
           }`}
@@ -206,7 +211,7 @@ function TopBar({
         </button>
       </div>
 
-      {/* settings menu */}
+      {/* Settings dropdown menu */}
       {menu && (
         <div className="surface mt-2 rounded-2xl p-4 text-[13px] animate-drop">
           {Object.keys(BASE_LAYERS).length > 1 && (
