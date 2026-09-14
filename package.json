@@ -19,7 +19,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test \"test/**/*.test.ts\"",
     "build:gtfs": "tsx scripts/build-gtfs.ts",
-    "benchmark": "tsx scripts/benchmark-search.ts"
+    "benchmark": "tsx scripts/benchmark-search.ts",
+    "benchmark:site": "tsx scripts/benchmark-site.ts"
   },
   "dependencies": {
     "@maplibre/maplibre-gl-leaflet": "^0.1.3",

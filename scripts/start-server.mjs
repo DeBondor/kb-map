@@ -34,7 +34,7 @@ if (fs.existsSync(standaloneServer)) {
     env: {
       ...process.env,
       PORT: port,
-      HOSTNAME: process.env.HOSTNAME || "0.0.0.0",
+      HOSTNAME: process.env.HOST || "0.0.0.0",
       // server.js chdirs into .next/standalone; keep output/ (GTFS feeds, logs)
       // resolving to the repo root so build:gtfs output stays visible.
       KB_OUTPUT_DIR: process.env.KB_OUTPUT_DIR || path.join(process.cwd(), "output"),

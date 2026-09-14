@@ -2,9 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import useSWR from "swr";
-import { swrFetcher } from "@/lib/client/api";
+import { fetchJSON, swrFetcher } from "@/lib/client/api";
 import { nowSecs } from "@/lib/client/format";
 import type { LinesResponse, StopsResponse, VehiclesResponse } from "@/lib/client/types";
+
+/** Cached SWR fetcher — honors HTTP Cache-Control headers for static catalogs */
+const cachedFetcher = <T>(url: string): Promise<T> => fetchJSON<T>(url);
 
 /** Live vehicle positions, polled every 4 s, never HTTP-cached. */
 export function useVehicles() {
@@ -18,19 +21,18 @@ export function useVehicles() {
   });
 }
 
-/** Static stop list (~950 entries) — fetched once per session. */
+/** Static stop list (~950 entries) — fetched once per session, HTTP cached. */
 export function useStops() {
-  return useSWR<StopsResponse>("/api/stops", swrFetcher, {
+  return useSWR<StopsResponse>("/api/stops", cachedFetcher, {
     revalidateOnFocus: false,
     revalidateIfStale: false,
     revalidateOnReconnect: false,
   });
 }
 
-/** Static GTFS line catalog — fetched once per session (called only from the
- *  open command palette, so the request is lazy). */
+/** Static GTFS line catalog — fetched once per session, HTTP cached. */
 export function useLines() {
-  return useSWR<LinesResponse>("/api/lines", swrFetcher, {
+  return useSWR<LinesResponse>("/api/lines", cachedFetcher, {
     revalidateOnFocus: false,
     revalidateIfStale: false,
     revalidateOnReconnect: false,

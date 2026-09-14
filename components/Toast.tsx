@@ -17,7 +17,7 @@ function Toast({ text, actionLabel, onAction, onClose }: Props) {
     <div
       role="status"
       aria-live="polite"
-      className="surface fixed left-1/2 top-[calc(max(0.75rem,env(safe-area-inset-top))+60px)] z-[1100] flex w-max max-w-[min(400px,calc(100vw-24px))] -translate-x-1/2 items-center gap-2.5 rounded-full py-2 pl-4 pr-2 text-[13px] text-text animate-drop"
+      className="surface fixed left-1/2 top-[calc(env(safe-area-inset-top,0px)+0.75rem+60px)] z-[1100] flex w-max max-w-[min(400px,calc(100vw-24px))] -translate-x-1/2 items-center gap-2.5 rounded-full py-2 pl-4 pr-2 text-[13px] text-text animate-drop"
     >
       <span className="min-w-0 flex-1">{text}</span>
       {actionLabel && onAction && (

@@ -40,7 +40,7 @@ export function getTrip(tripId: string | number, signal?: AbortSignal): Promise<
   // final failure and drop the key so a later caller retries.
   const fetchWithRetry = async (retries = 2, delayMs = 150): Promise<Trip | null> => {
     try {
-      const tr = await fetchJSON<Trip>(`/api/trip/${encodeURIComponent(key)}`, { signal, cache: "no-store" });
+      const tr = await fetchJSON<Trip>(`/api/trip/${encodeURIComponent(key)}`, { signal });
       if (!tr?.times?.length) tripCache.delete(key);
       return tr;
     } catch (err: unknown) {
@@ -56,6 +56,63 @@ export function getTrip(tripId: string | number, signal?: AbortSignal): Promise<
   tripCache.set(key, p);
   capMap(tripCache, TRIP_CACHE_MAX);
   return p;
+}
+
+interface TripsBatchResponse {
+  count: number;
+  trips: Record<string, Trip>;
+}
+
+/**
+ * Resolves multiple trips in a single network round-trip via /api/trips,
+ * falling back to individual getTrip on transient errors.
+ */
+export async function getTripsBatch(
+  tripIds: Array<string | number>,
+  signal?: AbortSignal,
+): Promise<Map<string, Trip | null>> {
+  const result = new Map<string, Trip | null>();
+  const missing: string[] = [];
+
+  for (const tid of tripIds) {
+    const key = String(tid);
+    const hit = tripCache.get(key);
+    if (hit) {
+      result.set(key, await hit);
+    } else {
+      missing.push(key);
+    }
+  }
+
+  if (!missing.length) return result;
+
+  const BATCH_SIZE = 100;
+  for (let i = 0; i < missing.length; i += BATCH_SIZE) {
+    if (signal?.aborted) break;
+    const chunk = missing.slice(i, i + BATCH_SIZE);
+    try {
+      const res = await fetchJSON<TripsBatchResponse>(
+        `/api/trips?ids=${chunk.map(encodeURIComponent).join(",")}`,
+        { signal },
+      );
+      for (const id of chunk) {
+        const tr = res.trips?.[id] ?? null;
+        const p = Promise.resolve(tr);
+        tripCache.set(id, p);
+        result.set(id, tr);
+      }
+    } catch {
+      await Promise.all(
+        chunk.map(async (id) => {
+          const tr = await getTrip(id, signal);
+          result.set(id, tr);
+        }),
+      );
+    }
+  }
+
+  capMap(tripCache, TRIP_CACHE_MAX);
+  return result;
 }
 
 /* ---------- OSRM road-following segments ---------- */

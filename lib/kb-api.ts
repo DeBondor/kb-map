@@ -151,6 +151,9 @@ export class KbApi {
     this.headers = { "User-Agent": config.USER_AGENT, Accept: "application/json" };
   }
 
+  private readonly tripCache = new Map<string, { data: unknown; expiresAt: number }>();
+  private readonly timetableCache = new Map<string, { data: unknown; expiresAt: number }>();
+
   /**
    * GET a JSON path. 404 -> null. Network errors / non-2xx statuses are
    * retried up to `retries` extra times with 0.4s*(attempt+1) backoff; the
@@ -215,21 +218,71 @@ export class KbApi {
     return parseStops(raw);
   }
 
-  /** GET /api/timetables/<stopUrlId>?date=YYYY-MM-DD (raw passthrough). */
+  /** GET /api/timetables/<stopUrlId>?date=YYYY-MM-DD (raw passthrough with 15-min in-memory cache). */
   async fetchTimetable(stopUrlId: string, date: string): Promise<unknown> {
-    return this.get(`/api/timetables/${stopUrlId}?date=${date}`);
+    const key = `${stopUrlId}:${date}`;
+    const hit = this.timetableCache.get(key);
+    const now = Date.now();
+    if (hit && hit.expiresAt > now) {
+      return hit.data;
+    }
+    const data = await this.get(`/api/timetables/${stopUrlId}?date=${date}`);
+    if (pyTruthy(data)) {
+      if (this.timetableCache.size >= 1000) {
+        const oldest = this.timetableCache.keys().next().value;
+        if (oldest) this.timetableCache.delete(oldest);
+      }
+      this.timetableCache.set(key, { data, expiresAt: now + 15 * 60 * 1000 });
+    }
+    return data;
   }
 
   /** Fetch and parse one trip detail. */
   async fetchTrip(tripId: string, index = 0): Promise<Trip | null> {
-    const raw = await this.get(`/api/trip/${tripId}/${index}`);
+    const raw = await this.fetchTripRaw(tripId, index);
     if (!pyTruthy(raw)) return null;
     return parseTrip(raw, tripId);
   }
 
-  /** GET /api/trip/<tripId>/<index> (raw passthrough). */
+  /** GET /api/trip/<tripId>/<index> (raw passthrough with 4h in-memory cache). */
   async fetchTripRaw(tripId: string, index = 0): Promise<unknown> {
-    return this.get(`/api/trip/${tripId}/${index}`);
+    const key = `${tripId}:${index}`;
+    const hit = this.tripCache.get(key);
+    const now = Date.now();
+    if (hit && hit.expiresAt > now) {
+      return hit.data;
+    }
+    const data = await this.get(`/api/trip/${tripId}/${index}`);
+    if (pyTruthy(data)) {
+      if (this.tripCache.size >= 5000) {
+        const oldest = this.tripCache.keys().next().value;
+        if (oldest) this.tripCache.delete(oldest);
+      }
+      this.tripCache.set(key, { data, expiresAt: now + 4 * 3600 * 1000 });
+    }
+    return data;
+  }
+
+  /**
+   * Batch resolves multiple trips through the in-memory cache and shared p-limit.
+   */
+  async fetchTripsBatch(tripIds: readonly string[], index = 0): Promise<Record<string, unknown>> {
+    const unique = Array.from(new Set(tripIds));
+    const entries = await Promise.all(
+      unique.map(async (tid): Promise<[string, unknown]> => {
+        try {
+          const raw = await this.fetchTripRaw(tid, index);
+          return [tid, pyTruthy(raw) ? raw : null];
+        } catch {
+          return [tid, null];
+        }
+      }),
+    );
+    const out: Record<string, unknown> = {};
+    for (const [id, data] of entries) {
+      if (data !== null) out[id] = data;
+    }
+    return out;
   }
 
   /** GET /api/departures/<stopUrlId> (raw passthrough). */

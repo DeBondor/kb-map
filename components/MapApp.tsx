@@ -810,7 +810,7 @@ export default function MapApp() {
   }, [trip, vehicles]);
 
   return (
-    <div className="relative h-dvh w-full overflow-hidden bg-bg">
+    <div className="fixed inset-0 h-full w-full overflow-hidden bg-bg">
       <MapContainer
         center={initialUrl.map ? [initialUrl.map.lat, initialUrl.map.lon] : [49.822, 19.046]}
         zoom={initialUrl.map?.zoom ?? 11}

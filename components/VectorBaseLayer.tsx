@@ -15,9 +15,9 @@ import "@maplibre/maplibre-gl-leaflet";
 export type BasemapStatus = "loading" | "ready" | "failed";
 
 type GlMap = {
-  once(type: "idle" | "styledata", fn: () => void): unknown;
-  on(type: "error" | "styleimagemissing", fn: (e?: { id?: string }) => void): unknown;
-  off(type: "idle" | "error" | "styledata" | "styleimagemissing", fn: (e?: { id?: string }) => void): unknown;
+  once(type: "idle" | "styledata" | "load" | "render", fn: () => void): unknown;
+  on(type: "error" | "styleimagemissing" | "render", fn: (e?: { id?: string }) => void): unknown;
+  off(type: "idle" | "error" | "styledata" | "styleimagemissing" | "load" | "render", fn: (e?: { id?: string }) => void): unknown;
   isStyleLoaded(): boolean;
   areTilesLoaded(): boolean;
   resize(): unknown;
@@ -52,7 +52,7 @@ const OFM_ATTRIBUTION =
   'Data <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">&copy; OpenStreetMap</a>';
 
 /** style JSON never arrived after this long → give up and let the caller fall back */
-const STYLE_TIMEOUT_MS = 15_000;
+const STYLE_TIMEOUT_MS = 5_000;
 
 export default function VectorBaseLayer({
   style,
@@ -73,9 +73,9 @@ export default function VectorBaseLayer({
     const layer = maplibreGL({
       style,
       attribution: OFM_ATTRIBUTION,
-      // ---- smoothness tuning (targets the "blank/late/pixelated tiles" jank) ----
-      // render 18% beyond the viewport so a pan shows drawn map, not blank
-      padding: 0.18,
+      // ---- smoothness tuning ----
+      // moderate padding: keep enough margin for fluid panning without overloading initial network download
+      padding: 0.08,
       // no cross-fade: freshly loaded tiles snap in instead of ghosting for 300ms
       fadeDuration: 0,
       // keep lots of already-rendered tiles so zoom-out/in & back-pan are instant
@@ -88,12 +88,9 @@ export default function VectorBaseLayer({
     const container = layer.getContainer();
     container.style.filter = filter ?? "";
 
-    /* readiness: `idle` with style + tiles actually loaded = painted map.
-       A bare `idle` can fire before any tile was even requested (canvas sized
-       from a not-yet-settled container), which would drop the caller's veil
-       onto a bare style-background flash — so re-arm until tiles confirm.
-       `error` also fires for transient tile fetches, so only a style that
-       never loaded (or the timeout hitting first) counts as failure. */
+    /* readiness: style loaded + first paint frame rendered = visible map.
+       We do NOT block on areTilesLoaded() across the entire surrounding region,
+       allowing the progressive vector basemap to display immediately. */
     onStatus?.("loading");
     const gl = layer.getMaplibreMap(); // _glMap exists synchronously after addTo
     let settled = false;
@@ -103,22 +100,33 @@ export default function VectorBaseLayer({
       window.clearTimeout(timer);
       onStatus?.(s);
     };
+
+    const checkReady = () => {
+      if (settled) return;
+      if (gl.isStyleLoaded()) settle("ready");
+    };
+
     const onIdle = () => {
       if (settled) return;
-      if (gl.isStyleLoaded() && gl.areTilesLoaded()) settle("ready");
-      else gl.once("idle", onIdle); // idle fired too early — wait for the next one
+      if (gl.isStyleLoaded()) settle("ready");
+      else gl.once("idle", onIdle);
     };
-    /* isStyleLoaded() stays false while ANY tile/sprite is still pending, so a
-       transient tile error during warm-up would read as "style never loaded"
-       and needlessly drop the session to the raster fallback. `styledata` fires
-       as soon as the style JSON itself arrives — only errors before that mean
-       the style is truly unreachable; later ones are tile noise for the 12 s
-       timeout to arbitrate. */
+
+    const onRender = () => {
+      if (settled) return;
+      if (gl.isStyleLoaded()) settle("ready");
+    };
+
     let styleArrived = false;
     const onStyleData = () => {
       styleArrived = true;
+      requestAnimationFrame(checkReady);
     };
     gl.once("styledata", onStyleData);
+    gl.once("load", checkReady);
+    gl.on("render", onRender);
+    gl.once("idle", onIdle);
+
     const onErr = () => {
       if (!styleArrived) settle("failed");
     };
@@ -138,7 +146,6 @@ export default function VectorBaseLayer({
       }
     };
     gl.on("styleimagemissing", onImageMissing);
-    gl.once("idle", onIdle);
     gl.on("error", onErr);
     /* re-measure once layout settles (dvh on mobile) — a canvas created from a
        stale container size renders a mis-sized patch until something resizes */
@@ -152,6 +159,8 @@ export default function VectorBaseLayer({
       window.clearTimeout(timer);
       gl.off("styleimagemissing", onImageMissing);
       gl.off("idle", onIdle);
+      gl.off("render", onRender);
+      gl.off("load", checkReady);
       gl.off("error", onErr);
       gl.off("styledata", onStyleData);
       map.removeLayer(layer);

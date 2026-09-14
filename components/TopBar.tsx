@@ -130,7 +130,7 @@ function TopBar({
   return (
     <div
       ref={rootRef}
-      className="absolute left-3 top-[max(0.75rem,env(safe-area-inset-top))] z-[1002] w-[min(440px,calc(100vw-24px))] md:left-1/2 md:-translate-x-1/2"
+      className="absolute left-3 top-[calc(env(safe-area-inset-top,0px)+0.75rem)] z-[1002] w-[min(440px,calc(100vw-24px))] md:left-1/2 md:-translate-x-1/2"
     >
       {/* Search pill with live inline search input */}
       <div className="surface flex h-12 items-center gap-2 rounded-full pl-3.5 pr-1.5 shadow-lg">

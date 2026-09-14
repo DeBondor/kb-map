@@ -4,7 +4,7 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import BottomSheet from "@/components/BottomSheet";
 import { useNow } from "@/components/hooks";
 import { CloseIcon, EmptyState, ErrorState, IconButton, LineBadge, ShareButton, SkeletonRows, StarIcon } from "@/components/ui";
-import { fetchJSON, getTrip } from "@/lib/client/api";
+import { fetchJSON, getTripsBatch } from "@/lib/client/api";
 import { useFavorites } from "@/lib/client/favorites";
 import {
   countdown,
@@ -23,7 +23,6 @@ import type {
   Stop,
   TimetableDeparture,
   TimetableResponse,
-  Trip,
   Vehicle,
 } from "@/lib/client/types";
 
@@ -52,6 +51,8 @@ function Chevron() {
     </svg>
   );
 }
+
+const timetableRowCache = new Map<string, TtRow[]>();
 
 function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, onPlanRoute }: Props) {
   const [tab, setTab] = useState<Tab>("live");
@@ -137,40 +138,37 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
     if (tab !== "tt" || tt !== null || ttErr) return;
     const ac = new AbortController();
     let cancelled = false;
+    const cacheKey = `${stop.designator}:${todayISO()}`;
     (async () => {
+      const cachedRows = timetableRowCache.get(cacheKey);
+      if (cachedRows) {
+        if (!cancelled) setTt(cachedRows);
+        return;
+      }
       try {
         setTtPhase("timetable");
         const d = await fetchJSON<TimetableResponse>(
           `/api/stop/${encodeURIComponent(stop.designator)}/timetable?date=${todayISO()}`,
-          { cache: "no-store", signal: ac.signal },
+          { signal: ac.signal },
         );
         const deps = d.departures ?? [];
         if (cancelled) return;
         setTtPhase("trips");
         const uniqueTripIds = Array.from(new Set(deps.map((dp) => dp.trip_id).filter(Boolean)));
-        const tripMap = new Map<string | number, Trip | null>();
-        const BATCH_SIZE = 20;
-        for (let i = 0; i < uniqueTripIds.length; i += BATCH_SIZE) {
-          if (cancelled) return;
-          const batch = uniqueTripIds.slice(i, i + BATCH_SIZE);
-          await Promise.all(
-            batch.map(async (tid) => {
-              const tr = await getTrip(tid, ac.signal);
-              tripMap.set(tid, tr);
-              return tr;
-            }),
-          );
-        }
+        const tripMap = await getTripsBatch(uniqueTripIds, ac.signal);
         if (cancelled) return;
         const rows: TtRow[] = deps.map((dp) => {
-          const trip = tripMap.get(dp.trip_id);
+          const trip = tripMap.get(String(dp.trip_id));
           return {
             dp,
             line: trip?.line?.name || "?",
             dir: trip?.direction || d.main_direction?.name || "",
           };
         });
-        if (!cancelled) setTt(rows);
+        if (!cancelled) {
+          timetableRowCache.set(cacheKey, rows);
+          setTt(rows);
+        }
       } catch {
         if (!cancelled && !ac.signal.aborted) setTtErr(true);
       } finally {

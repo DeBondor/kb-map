@@ -16,7 +16,7 @@ interface Props {
 
 function LineFilterChip({ lines, visibleCount, onClear, onOpenPalette }: Props) {
   return (
-    <div className="absolute left-3 top-[calc(max(0.75rem,env(safe-area-inset-top))+56px)] z-[1001] max-w-[calc(100vw-24px)] md:left-1/2 md:-translate-x-1/2 animate-drop">
+    <div className="absolute left-3 top-[calc(env(safe-area-inset-top,0px)+0.75rem+56px)] z-[1001] max-w-[calc(100vw-24px)] md:left-1/2 md:-translate-x-1/2 animate-drop">
       <div className="surface flex items-center gap-1 rounded-full py-1 pl-1.5 pr-1">
         <button
           type="button"

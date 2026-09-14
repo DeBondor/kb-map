@@ -20,7 +20,9 @@ export async function GET(
   try {
     await startPoller();
     const data = await getApi().fetchTripRaw(tripId, index);
-    return Response.json(pyTruthy(data) ? data : {});
+    return Response.json(pyTruthy(data) ? data : {}, {
+      headers: { "Cache-Control": "public, max-age=3600" },
+    });
   } catch (err) {
     return upstreamError("trip", err);
   }

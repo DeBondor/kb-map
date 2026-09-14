@@ -20,7 +20,9 @@ export async function GET(
   try {
     await startPoller();
     const data = await getApi().fetchTimetable(designator, date);
-    return Response.json(pyTruthy(data) ? data : {});
+    return Response.json(pyTruthy(data) ? data : {}, {
+      headers: { "Cache-Control": "public, max-age=900" },
+    });
   } catch (err) {
     return upstreamError("timetable", err);
   }
