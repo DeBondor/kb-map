@@ -76,6 +76,7 @@ function TripLayer({ trip, desktop, vehMeta, liveVehicle }: Props) {
     // the CSS reduced-motion reset can't reach Leaflet's JS-driven pan — gate it here
     const reduce = prefersReducedMotion();
     // a single point makes zero-size bounds → fitBounds would compute zoom Infinity
+    map.getContainer().classList.add("map-moving");
     if (pts.length === 1) {
       map.setView(pts[0], 16, { animate: !reduce, duration: reduce ? 0 : 0.9 });
       return;

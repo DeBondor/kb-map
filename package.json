@@ -18,7 +18,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test \"test/**/*.test.ts\"",
-    "build:gtfs": "tsx scripts/build-gtfs.ts"
+    "build:gtfs": "tsx scripts/build-gtfs.ts",
+    "benchmark": "tsx scripts/benchmark-search.ts"
   },
   "dependencies": {
     "@maplibre/maplibre-gl-leaflet": "^0.1.3",

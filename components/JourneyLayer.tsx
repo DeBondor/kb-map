@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useMemo } from "react";
+import { Fragment, memo, useEffect, useMemo } from "react";
 import { CircleMarker, Marker, Polyline, Tooltip, useMap } from "react-leaflet";
 import L from "leaflet";
 import { displayStopName, hslColor } from "@/lib/client/format";
@@ -43,6 +43,7 @@ function JourneyLayer({ journey, desktop }: Props) {
       : { paddingTopLeft: [24, 80], paddingBottomRight: [24, Math.round(window.innerHeight * 0.35)] };
 
     const reduce = prefersReducedMotion();
+    map.getContainer().classList.add("map-moving");
     if (allPoints.length === 1) {
       map.setView(allPoints[0], 15, { animate: !reduce, duration: reduce ? 0 : 0.9 });
       return;
@@ -71,7 +72,7 @@ function JourneyLayer({ journey, desktop }: Props) {
         if (pts.length < 2) return null;
 
         return (
-          <div key={`journey-leg-${lIdx}`}>
+          <Fragment key={`journey-leg-${lIdx}`}>
             {/* Casing line */}
             <Polyline
               positions={pts}
@@ -94,7 +95,7 @@ function JourneyLayer({ journey, desktop }: Props) {
                 lineJoin: "round",
               }}
             />
-          </div>
+          </Fragment>
         );
       })}
 

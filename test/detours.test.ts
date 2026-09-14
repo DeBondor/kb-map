@@ -42,6 +42,26 @@ describe("injectDetourPoints", () => {
     assert.ok(res.points.some((p) => Math.abs(p[0] - 49.8241) < 1e-4));
   });
 
+  it("preserves all stops on circular line 134 without truncating loop", () => {
+    // Line 134 starts at Bielsko DA, visits Słowackiego, Grunwaldzka, Konopnickiej, loops through Grodziec, and returns to Bielsko DA
+    const pts: LatLng[] = [
+      [49.8302, 19.0427], // DA (start)
+      [49.8272, 19.0391], // Słowackiego BCK
+      [49.8233, 19.0344], // Grunwaldzka
+      [49.8200, 19.0291], // Konopnickiej
+      [49.8145, 19.0185], // Hulanka
+      [49.8000, 18.9000], // Jaworze / Jasienica / Grodziec (far outside)
+      [49.8142, 19.0180], // Hulanka return
+      [49.8302, 19.0427], // DA (end)
+    ];
+    const res = injectDetourPoints(pts, "134", "Grodziec Zagóra");
+    assert.ok(res.detour);
+    assert.equal(res.detour?.id, "bielsko-piastowska");
+    // Middle loop stops must not be deleted!
+    assert.equal(res.points.length, pts.length);
+    assert.ok(res.points.some((p) => Math.abs(p[0] - 49.8000) < 1e-4));
+  });
+
   it("leaves points unchanged if line has no detour", () => {
     const pts: LatLng[] = [
       [49.827, 19.049],

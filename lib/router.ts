@@ -481,7 +481,7 @@ function buildLegStops(
   for (let s = startIdx; s <= endIdx; s++) {
     const ts = trip.stops[s];
     const sEntry = idx.stops.get(ts.stopId);
-    const offsetArr = (ts.arr < tripDep0 ? ts.arr + 86400 : ts.arr) - tripDep0;
+    const offsetArr = s === startIdx ? 0 : (ts.arr < tripDep0 ? ts.arr + 86400 : ts.arr) - tripDep0;
     const offsetDep = (ts.dep < tripDep0 ? ts.dep + 86400 : ts.dep) - tripDep0;
     result.push({
       stopId: ts.stopId,
@@ -507,67 +507,106 @@ function searchDayConnections(
 ): ConnectionItinerary[] {
   const itineraries: ConnectionItinerary[] = [];
 
+  // Pre-filter candidate trips departing from origin poles via index (replaces full network scan)
+  const candidateFromTrips: Array<{ trip: TripEntry; fromIdx: number }> = [];
+  const seenFromTrips = new Set<string>();
+  for (const fId of fromPoles) {
+    const sEntry = idx.stops.get(fId);
+    if (!sEntry) continue;
+    const cands = idx.tripsByCleanKey.get(sEntry.cleanKey);
+    if (cands) {
+      for (const c of cands) {
+        if (fromPoles.has(c.trip.stops[c.stopIndex].stopId)) {
+          const k = `${c.trip.tripId}@${c.stopIndex}`;
+          if (!seenFromTrips.has(k)) {
+            seenFromTrips.add(k);
+            candidateFromTrips.push({ trip: c.trip, fromIdx: c.stopIndex });
+          }
+        }
+      }
+    }
+  }
+  candidateFromTrips.sort((a, b) => a.trip.stops[a.fromIdx].dep - b.trip.stops[b.fromIdx].dep);
+
+  // Pre-calculate stops from which toPoles can be reached in 1 leg (for 2-transfer pruning)
+  const stopsReachingTo = new Set<string>();
+  for (const toId of toPoles) {
+    const toEntry = idx.stops.get(toId);
+    if (!toEntry) continue;
+    const toTrips = idx.tripsByCleanKey.get(toEntry.cleanKey);
+    if (toTrips) {
+      for (const { trip, stopIndex: toIdx } of toTrips) {
+        if (toPoles.has(trip.stops[toIdx].stopId)) {
+          for (let s = 0; s < toIdx; s++) {
+            const sId = trip.stops[s].stopId;
+            const sEntry = idx.stops.get(sId);
+            if (sEntry) {
+              stopsReachingTo.add(sEntry.cleanKey);
+              const near = idx.nearbyTransfers.get(sId);
+              if (near) {
+                for (const nb of near) stopsReachingTo.add(nb.cleanKey);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
   // 1. Direct connections (both current day and next-day wrap if starting late)
-  for (const trip of idx.trips.values()) {
-    for (const fId of fromPoles) {
-      const fromIndices = trip.stopIndices.get(fId);
-      if (!fromIndices) continue;
+  for (const { trip, fromIdx } of candidateFromTrips) {
+    const depStop = trip.stops[fromIdx];
 
-      for (const fromIdx of fromIndices) {
-        const depStop = trip.stops[fromIdx];
+    for (let j = fromIdx + 1; j < trip.stops.length; j++) {
+      if (toPoles.has(trip.stops[j].stopId)) {
+        const arrStop = trip.stops[j];
+        const tripDur = (arrStop.arr < depStop.dep ? arrStop.arr + 86400 : arrStop.arr) - depStop.dep;
+        const durationMins = Math.max(1, Math.round(tripDur / 60));
 
-        for (let j = fromIdx + 1; j < trip.stops.length; j++) {
-          if (toPoles.has(trip.stops[j].stopId)) {
-            const arrStop = trip.stops[j];
-            const tripDur = (arrStop.arr < depStop.dep ? arrStop.arr + 86400 : arrStop.arr) - depStop.dep;
-            const durationMins = Math.max(1, Math.round(tripDur / 60));
+        for (const isNextDay of [false, true]) {
+          const tripDayOfWeek = isNextDay ? (dayOfWeek + 1) % 7 : dayOfWeek;
+          if (!isTripActiveOnDay(trip, tripDayOfWeek, idx.services)) continue;
 
-            for (const isNextDay of [false, true]) {
-              const tripDayOfWeek = isNextDay ? (dayOfWeek + 1) % 7 : dayOfWeek;
-              if (!isTripActiveOnDay(trip, tripDayOfWeek, idx.services)) continue;
+          const depSecs = isNextDay ? depStop.dep + 86400 : depStop.dep;
+          if (depSecs < afterSecs || depSecs > afterSecs + 86400) continue;
+          const arrSecs = depSecs + tripDur;
+          const arrivesNextDay = arrSecs >= 86400;
 
-              const depSecs = isNextDay ? depStop.dep + 86400 : depStop.dep;
-              if (depSecs < afterSecs || depSecs > afterSecs + 86400) continue;
-              const arrSecs = depSecs + tripDur;
-              const arrivesNextDay = arrSecs >= 86400;
+          const legStops = buildLegStops(trip, fromIdx, j, idx, depSecs);
 
-              const legStops = buildLegStops(trip, fromIdx, j, idx, depSecs);
-
-              itineraries.push({
-                type: "direct",
+          itineraries.push({
+            type: "direct",
+            departureTime: formatHHMM(depSecs),
+            arrivalTime: formatHHMM(arrSecs),
+            departureSecs: depSecs,
+            arrivalSecs: arrSecs,
+            totalDurationMins: durationMins,
+            transfersCount: 0,
+            walkMinutes: 0,
+            date: searchDate,
+            dayLabel: searchDayLabel,
+            arrivesNextDay,
+            legs: [
+              {
+                line: trip.line,
+                tripId: trip.tripId,
+                headsign: trip.headsign,
+                fromStopId: depStop.stopId,
+                fromStopName: idx.stops.get(depStop.stopId)?.name || depStop.stopId,
+                toStopId: arrStop.stopId,
+                toStopName: idx.stops.get(arrStop.stopId)?.name || arrStop.stopId,
                 departureTime: formatHHMM(depSecs),
                 arrivalTime: formatHHMM(arrSecs),
                 departureSecs: depSecs,
                 arrivalSecs: arrSecs,
-                totalDurationMins: durationMins,
-                transfersCount: 0,
-                walkMinutes: 0,
-                date: searchDate,
-                dayLabel: searchDayLabel,
-                arrivesNextDay,
-                legs: [
-                  {
-                    line: trip.line,
-                    tripId: trip.tripId,
-                    headsign: trip.headsign,
-                    fromStopId: depStop.stopId,
-                    fromStopName: idx.stops.get(depStop.stopId)?.name || depStop.stopId,
-                    toStopId: arrStop.stopId,
-                    toStopName: idx.stops.get(arrStop.stopId)?.name || arrStop.stopId,
-                    departureTime: formatHHMM(depSecs),
-                    arrivalTime: formatHHMM(arrSecs),
-                    departureSecs: depSecs,
-                    arrivalSecs: arrSecs,
-                    durationMins,
-                    stopsCount: j - fromIdx,
-                    stops: legStops,
-                  },
-                ],
-              });
-            }
-            break; // found first destination stop for this fromIdx
-          }
+                durationMins,
+                stopsCount: j - fromIdx,
+                stops: legStops,
+              },
+            ],
+          });
         }
+        break; // found first destination stop for this fromIdx
       }
     }
   }
@@ -578,59 +617,68 @@ function searchDayConnections(
     const MAX_TRANSFER_SECS = query.maxTransferSecs ?? 9000; // default 2.5 hours max wait for daytime
     const OVERNIGHT_TRANSFER_SECS = 43200; // allow overnight transfers up to 12h
 
-    for (const trip1 of idx.trips.values()) {
-      for (const fId of fromPoles) {
-        const fromIndices = trip1.stopIndices.get(fId);
-        if (!fromIndices) continue;
+    for (const { trip: trip1, fromIdx } of candidateFromTrips) {
+      if (itineraries.length >= 25) break;
+      const dep1Raw = trip1.stops[fromIdx].dep;
 
-        for (const fromIdx of fromIndices) {
-          const dep1Raw = trip1.stops[fromIdx].dep;
+      for (const isNextDay1 of [false, true]) {
+        const trip1DayOfWeek = isNextDay1 ? (dayOfWeek + 1) % 7 : dayOfWeek;
+        if (!isTripActiveOnDay(trip1, trip1DayOfWeek, idx.services)) continue;
 
-          for (let j = fromIdx + 1; j < trip1.stops.length; j++) {
-            const transStopId = trip1.stops[j].stopId;
-            if (toPoles.has(transStopId)) continue; // direct leg
-            const transEntry = idx.stops.get(transStopId);
-            if (!transEntry) continue;
+        const dep1Secs = isNextDay1 ? dep1Raw + 86400 : dep1Raw;
+        if (dep1Secs < afterSecs || dep1Secs > afterSecs + 86400) continue;
 
-            const arr1Raw = trip1.stops[j].arr;
-            const dur1 = (arr1Raw < dep1Raw ? arr1Raw + 86400 : arr1Raw) - dep1Raw;
-            const leg1Dur = Math.max(1, Math.round(dur1 / 60));
+        for (let j = fromIdx + 1; j < trip1.stops.length; j++) {
+          const transStopId = trip1.stops[j].stopId;
+          if (toPoles.has(transStopId)) continue; // direct leg
+          const transEntry = idx.stops.get(transStopId);
+          if (!transEntry) continue;
 
-            for (const isNextDay1 of [false, true]) {
-              const trip1DayOfWeek = isNextDay1 ? (dayOfWeek + 1) % 7 : dayOfWeek;
-              if (!isTripActiveOnDay(trip1, trip1DayOfWeek, idx.services)) continue;
+          const arr1Raw = trip1.stops[j].arr;
+          const dur1 = (arr1Raw < dep1Raw ? arr1Raw + 86400 : arr1Raw) - dep1Raw;
+          const leg1Dur = Math.max(1, Math.round(dur1 / 60));
+          const arr1Secs = dep1Secs + dur1;
 
-              const dep1Secs = isNextDay1 ? dep1Raw + 86400 : dep1Raw;
-              if (dep1Secs < afterSecs || dep1Secs > afterSecs + 86400) continue;
-              const arr1Secs = dep1Secs + dur1;
+          // Candidates: same stop (walkSecs=0) + nearby walkable stops
+          const transferOptions: Array<{ stopId: string; name: string; cleanKey: string; walkSecs: number }> = [
+            { stopId: transStopId, name: transEntry.name, cleanKey: transEntry.cleanKey, walkSecs: 0 },
+          ];
 
-              // Candidates: same stop (walkSecs=0) + nearby walkable stops
-              const transferOptions: Array<{ stopId: string; name: string; cleanKey: string; walkSecs: number }> = [
-                { stopId: transStopId, name: transEntry.name, cleanKey: transEntry.cleanKey, walkSecs: 0 },
-              ];
-
-              const nearby = idx.nearbyTransfers.get(transStopId);
-              if (nearby) {
-                for (const nb of nearby) {
-                  if (!transferOptions.some((o) => o.cleanKey === nb.cleanKey)) {
-                    transferOptions.push({
-                      stopId: nb.stopId,
-                      name: nb.stopName,
-                      cleanKey: nb.cleanKey,
-                      walkSecs: nb.walkSecs,
-                    });
-                  }
-                }
+          const nearby = idx.nearbyTransfers.get(transStopId);
+          if (nearby) {
+            for (const nb of nearby) {
+              if (!transferOptions.some((o) => o.cleanKey === nb.cleanKey)) {
+                transferOptions.push({
+                  stopId: nb.stopId,
+                  name: nb.stopName,
+                  cleanKey: nb.cleanKey,
+                  walkSecs: nb.walkSecs,
+                });
               }
+            }
+          }
 
-              for (const opt of transferOptions) {
-                const candidateTrips = idx.tripsByCleanKey.get(opt.cleanKey);
-                if (!candidateTrips) continue;
+          for (const opt of transferOptions) {
+            if (!stopsReachingTo.has(opt.cleanKey)) continue;
+            const candidateTrips = idx.tripsByCleanKey.get(opt.cleanKey);
+            if (!candidateTrips) continue;
 
-                const minTransferNeeded = opt.walkSecs > 0 ? Math.max(MIN_TRANSFER_SECS, opt.walkSecs + 90) : MIN_TRANSFER_SECS;
+            const minTransferNeeded = opt.walkSecs > 0 ? Math.max(MIN_TRANSFER_SECS, opt.walkSecs + 90) : MIN_TRANSFER_SECS;
 
                 for (const { trip: trip2, stopIndex: transIdx } of candidateTrips) {
                   if (trip2.tripId === trip1.tripId) continue;
+
+                  // Fast destination pre-check: does trip2 visit toPoles after transIdx?
+                  let k: number | null = null;
+                  for (const toId of toPoles) {
+                    const idxList = trip2.stopIndices.get(toId);
+                    if (idxList) {
+                      for (const sIdx of idxList) {
+                        if (sIdx > transIdx && (k === null || sIdx < k)) k = sIdx;
+                      }
+                    }
+                  }
+                  if (k === null) continue;
 
                   const dep2Raw = trip2.stops[transIdx].dep;
                   let dep2Secs = Math.floor(arr1Secs / 86400) * 86400 + dep2Raw;
@@ -649,95 +697,84 @@ function searchDayConnections(
                   if (!isOvernightWait && waitSecs > MAX_TRANSFER_SECS) continue;
                   if (isOvernightWait && waitSecs > OVERNIGHT_TRANSFER_SECS) continue;
 
-                  for (let k = transIdx + 1; k < trip2.stops.length; k++) {
-                    if (toPoles.has(trip2.stops[k].stopId)) {
-                      const arr2Raw = trip2.stops[k].arr;
-                      const dur2 = (arr2Raw < dep2Raw ? arr2Raw + 86400 : arr2Raw) - dep2Raw;
-                      const arr2Secs = dep2Secs + dur2;
-                      const leg2Dur = Math.max(1, Math.round(dur2 / 60));
-                      const totalDur = Math.max(1, Math.round((arr2Secs - dep1Secs) / 60));
-                      const walkMins = opt.walkSecs > 0 ? Math.round(opt.walkSecs / 60) : 0;
-                      const transferStopName = opt.walkSecs > 0
-                        ? `${transEntry.name} → ${opt.name} (pieszo ${walkMins} min)`
-                        : transEntry.name;
-                      const arrivesNextDay = arr2Secs >= 86400;
+                  const arr2Raw = trip2.stops[k].arr;
+                  const dur2 = (arr2Raw < dep2Raw ? arr2Raw + 86400 : arr2Raw) - dep2Raw;
+                  const arr2Secs = dep2Secs + dur2;
+                  const leg2Dur = Math.max(1, Math.round(dur2 / 60));
+                  const totalDur = Math.max(1, Math.round((arr2Secs - dep1Secs) / 60));
+                  const walkMins = opt.walkSecs > 0 ? Math.round(opt.walkSecs / 60) : 0;
+                  const transferStopName = opt.walkSecs > 0
+                    ? `${transEntry.name} → ${opt.name} (pieszo ${walkMins} min)`
+                    : transEntry.name;
+                  const arrivesNextDay = arr2Secs >= 86400;
 
-                      const leg1Stops = buildLegStops(trip1, fromIdx, j, idx, dep1Secs);
-                      const leg2Stops = buildLegStops(trip2, transIdx, k, idx, dep2Secs);
+                  const leg1Stops = buildLegStops(trip1, fromIdx, j, idx, dep1Secs);
+                  const leg2Stops = buildLegStops(trip2, transIdx, k, idx, dep2Secs);
 
-                      itineraries.push({
-                        type: "transfer",
+                  itineraries.push({
+                    type: "transfer",
+                    departureTime: formatHHMM(dep1Secs),
+                    arrivalTime: formatHHMM(arr2Secs),
+                    departureSecs: dep1Secs,
+                    arrivalSecs: arr2Secs,
+                    totalDurationMins: totalDur,
+                    transfersCount: 1,
+                    transferWaitMins: Math.round(waitSecs / 60),
+                    transferStopName,
+                    walkMinutes: walkMins,
+                    date: searchDate,
+                    dayLabel: searchDayLabel,
+                    arrivesNextDay,
+                    legs: [
+                      {
+                        line: trip1.line,
+                        tripId: trip1.tripId,
+                        headsign: trip1.headsign,
+                        fromStopId: trip1.stops[fromIdx].stopId,
+                        fromStopName: idx.stops.get(trip1.stops[fromIdx].stopId)?.name || trip1.stops[fromIdx].stopId,
+                        toStopId: transEntry.id,
+                        toStopName: transEntry.name,
                         departureTime: formatHHMM(dep1Secs),
-                        arrivalTime: formatHHMM(arr2Secs),
+                        arrivalTime: formatHHMM(arr1Secs),
                         departureSecs: dep1Secs,
+                        arrivalSecs: arr1Secs,
+                        durationMins: leg1Dur,
+                        stopsCount: j - fromIdx,
+                        stops: leg1Stops,
+                      },
+                      {
+                        line: trip2.line,
+                        tripId: trip2.tripId,
+                        headsign: trip2.headsign,
+                        fromStopId: trip2.stops[transIdx].stopId,
+                        fromStopName: idx.stops.get(trip2.stops[transIdx].stopId)?.name || opt.name,
+                        toStopId: trip2.stops[k].stopId,
+                        toStopName: idx.stops.get(trip2.stops[k].stopId)?.name || trip2.stops[k].stopId,
+                        departureTime: formatHHMM(dep2Secs),
+                        arrivalTime: formatHHMM(arr2Secs),
+                        departureSecs: dep2Secs,
                         arrivalSecs: arr2Secs,
-                        totalDurationMins: totalDur,
-                        transfersCount: 1,
-                        transferWaitMins: Math.round(waitSecs / 60),
-                        transferStopName,
-                        walkMinutes: walkMins,
-                        date: searchDate,
-                        dayLabel: searchDayLabel,
-                        arrivesNextDay,
-                        legs: [
-                          {
-                            line: trip1.line,
-                            tripId: trip1.tripId,
-                            headsign: trip1.headsign,
-                            fromStopId: trip1.stops[fromIdx].stopId,
-                            fromStopName: idx.stops.get(trip1.stops[fromIdx].stopId)?.name || trip1.stops[fromIdx].stopId,
-                            toStopId: transEntry.id,
-                            toStopName: transEntry.name,
-                            departureTime: formatHHMM(dep1Secs),
-                            arrivalTime: formatHHMM(arr1Secs),
-                            departureSecs: dep1Secs,
-                            arrivalSecs: arr1Secs,
-                            durationMins: leg1Dur,
-                            stopsCount: j - fromIdx,
-                            stops: leg1Stops,
-                          },
-                          {
-                            line: trip2.line,
-                            tripId: trip2.tripId,
-                            headsign: trip2.headsign,
-                            fromStopId: trip2.stops[transIdx].stopId,
-                            fromStopName: idx.stops.get(trip2.stops[transIdx].stopId)?.name || opt.name,
-                            toStopId: trip2.stops[k].stopId,
-                            toStopName: idx.stops.get(trip2.stops[k].stopId)?.name || trip2.stops[k].stopId,
-                            departureTime: formatHHMM(dep2Secs),
-                            arrivalTime: formatHHMM(arr2Secs),
-                            departureSecs: dep2Secs,
-                            arrivalSecs: arr2Secs,
-                            durationMins: leg2Dur,
-                            stopsCount: k - transIdx,
-                            stops: leg2Stops,
-                          },
-                        ],
-                      });
-                      break;
-                    }
-                  }
+                        durationMins: leg2Dur,
+                        stopsCount: k - transIdx,
+                        stops: leg2Stops,
+                      },
+                    ],
+                  });
                 }
               }
             }
           }
         }
       }
-    }
-  }
 
   // 3. 2-transfer connections if needed (when direct + 1-transfer are few)
   if (!query.directOnly && itineraries.length < 5) {
     const MIN_TRANSFER_SECS = query.minTransferSecs ?? 180;
     const MAX_LEG_WAIT_SECS = 7200; // max 2 hours between legs for 2-transfer connections
 
-    for (const trip1 of idx.trips.values()) {
-      for (const fId of fromPoles) {
-        const fromIndices = trip1.stopIndices.get(fId);
-        if (!fromIndices) continue;
-
-        for (const fromIdx of fromIndices) {
-          const dep1Raw = trip1.stops[fromIdx].dep;
+    for (const { trip: trip1, fromIdx } of candidateFromTrips) {
+      if (itineraries.length >= 8) break;
+      const dep1Raw = trip1.stops[fromIdx].dep;
 
           for (const isNextDay1 of [false, true]) {
             const trip1DayOfWeek = isNextDay1 ? (dayOfWeek + 1) % 7 : dayOfWeek;
@@ -789,6 +826,7 @@ function searchDayConnections(
                   for (let m = t1Idx + 1; m < trip2.stops.length; m++) {
                     const transStop2 = idx.stops.get(trip2.stops[m].stopId);
                     if (!transStop2 || toPoles.has(transStop2.id) || transStop2.cleanKey === opt1.cleanKey) continue;
+                    if (!stopsReachingTo.has(transStop2.cleanKey)) continue;
 
                     const arr2Raw = trip2.stops[m].arr;
                     const dur2 = (arr2Raw < dep2Raw ? arr2Raw + 86400 : arr2Raw) - dep2Raw;
@@ -815,6 +853,18 @@ function searchDayConnections(
                       for (const { trip: trip3, stopIndex: t2Idx } of cand3) {
                         if (trip3.tripId === trip2.tripId || trip3.tripId === trip1.tripId) continue;
 
+                        // Fast destination pre-check: does trip3 visit toPoles after t2Idx?
+                        let k: number | null = null;
+                        for (const toId of toPoles) {
+                          const idxList = trip3.stopIndices.get(toId);
+                          if (idxList) {
+                            for (const sIdx of idxList) {
+                              if (sIdx > t2Idx && (k === null || sIdx < k)) k = sIdx;
+                            }
+                          }
+                        }
+                        if (k === null) continue;
+
                         const dep3Raw = trip3.stops[t2Idx].dep;
                         let dep3Secs = Math.floor(arr2Secs / 86400) * 86400 + dep3Raw;
                         if (dep3Secs < arr2Secs + minWait2) dep3Secs += 86400;
@@ -826,9 +876,7 @@ function searchDayConnections(
                         const wait2 = dep3Secs - arr2Secs;
                         if (wait2 < minWait2 || wait2 > MAX_LEG_WAIT_SECS) continue;
 
-                        for (let k = t2Idx + 1; k < trip3.stops.length; k++) {
-                          if (toPoles.has(trip3.stops[k].stopId)) {
-                            const arr3Raw = trip3.stops[k].arr;
+                        const arr3Raw = trip3.stops[k].arr;
                             const dur3 = (arr3Raw < dep3Raw ? arr3Raw + 86400 : arr3Raw) - dep3Raw;
                             const arr3Secs = dep3Secs + dur3;
                             const totalDur = Math.max(1, Math.round((arr3Secs - dep1Secs) / 60));
@@ -858,7 +906,7 @@ function searchDayConnections(
                                   tripId: trip1.tripId,
                                   headsign: trip1.headsign,
                                   fromStopId: trip1.stops[fromIdx].stopId,
-                                  fromStopName: transStop1.name,
+                                  fromStopName: idx.stops.get(trip1.stops[fromIdx].stopId)?.name || trip1.stops[fromIdx].stopId,
                                   toStopId: transStop1.id,
                                   toStopName: transStop1.name,
                                   departureTime: formatHHMM(dep1Secs),
@@ -903,7 +951,6 @@ function searchDayConnections(
                                 },
                               ],
                             });
-                            break;
                           }
                         }
                       }
@@ -913,10 +960,6 @@ function searchDayConnections(
               }
             }
           }
-        }
-      }
-    }
-  }
 
   return itineraries;
 }
@@ -1004,20 +1047,23 @@ export function findConnections(query: RouteQuery): ConnectionItinerary[] {
     nonDominated.sort((a, b) => {
       if (a.totalDurationMins !== b.totalDurationMins) return a.totalDurationMins - b.totalDurationMins;
       if (a.departureSecs !== b.departureSecs) return a.departureSecs - b.departureSecs;
-      return a.transfersCount - b.transfersCount;
+      if (a.transfersCount !== b.transfersCount) return a.transfersCount - b.transfersCount;
+      return (a.walkMinutes ?? 0) - (b.walkMinutes ?? 0);
     });
   } else if (query.sortBy === "arrival") {
     nonDominated.sort((a, b) => {
       if (a.arrivalSecs !== b.arrivalSecs) return a.arrivalSecs - b.arrivalSecs;
       if (a.departureSecs !== b.departureSecs) return b.departureSecs - a.departureSecs;
-      return a.transfersCount - b.transfersCount;
+      if (a.transfersCount !== b.transfersCount) return a.transfersCount - b.transfersCount;
+      return (a.walkMinutes ?? 0) - (b.walkMinutes ?? 0);
     });
   } else {
     // Default: chronological departure
     nonDominated.sort((a, b) => {
       if (a.departureSecs !== b.departureSecs) return a.departureSecs - b.departureSecs;
       if (a.arrivalSecs !== b.arrivalSecs) return a.arrivalSecs - b.arrivalSecs;
-      return a.transfersCount - b.transfersCount;
+      if (a.transfersCount !== b.transfersCount) return a.transfersCount - b.transfersCount;
+      return (a.walkMinutes ?? 0) - (b.walkMinutes ?? 0);
     });
   }
 

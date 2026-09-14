@@ -72,6 +72,12 @@ export function getLineDetour(line: string, direction?: string): LineDetour | nu
   return detour ?? null;
 }
 
+function approxDistanceMeters(p1: LatLng, p2: LatLng): number {
+  const dLat = (p1[0] - p2[0]) * 111000;
+  const dLon = (p1[1] - p2[1]) * 72000;
+  return Math.sqrt(dLat * dLat + dLon * dLon);
+}
+
 /**
  * Injects detour waypoints into the sequence of stop coordinates if the route passes through
  * the affected detour area.
@@ -90,25 +96,44 @@ export function injectDetourPoints(
     return { points, detour };
   }
 
-  const [minLat, minLon, maxLat, maxLon] = area;
-  let firstInside = -1;
-  let lastInside = -1;
-
-  for (let i = 0; i < points.length; i++) {
-    const [lat, lon] = points[i];
-    if (lat >= minLat && lat <= maxLat && lon >= minLon && lon <= maxLon) {
-      if (firstInside === -1) firstInside = i;
-      lastInside = i;
-    }
+  // If the trip already visits all detour waypoints (e.g. Słowackiego, Grunwaldzka, Konopnickiej
+  // which are scheduled stops on lines 121..134), the detour is already in the timetable.
+  // Do not alter points, but return the detour info for banners.
+  if (
+    detour.viaWaypoints.length > 0 &&
+    detour.viaWaypoints.every((wp) => points.some((pt) => approxDistanceMeters(pt, wp) < 380))
+  ) {
+    return { points, detour };
   }
 
-  if (firstInside === -1) {
+  const [minLat, minLon, maxLat, maxLon] = area;
+  // Find contiguous segments of points inside triggerArea so that loop lines
+  // entering and exiting the area (e.g. line 134) don't have intermediate stops wiped out.
+  const segments: Array<{ start: number; end: number }> = [];
+  let curStart = -1;
+  for (let i = 0; i < points.length; i++) {
+    const [lat, lon] = points[i];
+    const inside = lat >= minLat && lat <= maxLat && lon >= minLon && lon <= maxLon;
+    if (inside) {
+      if (curStart === -1) curStart = i;
+    } else if (curStart !== -1) {
+      segments.push({ start: curStart, end: i - 1 });
+      curStart = -1;
+    }
+  }
+  if (curStart !== -1) {
+    segments.push({ start: curStart, end: points.length - 1 });
+  }
+
+  if (segments.length === 0) {
     return { points, detour: null };
   }
 
-  // Insert detour via points between firstInside and lastInside
-  const before = points.slice(0, firstInside + 1);
-  const after = points.slice(lastInside);
+  // Only inject detour waypoints into the first affected contiguous segment,
+  // preserving all stops before and after that segment.
+  const seg = segments[0];
+  const before = points.slice(0, seg.start + 1);
+  const after = points.slice(seg.end);
   const combined = [...before, ...detour.viaWaypoints, ...after];
 
   return { points: combined, detour };
