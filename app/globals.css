@@ -83,7 +83,16 @@
 
 /* ---------- base ---------- */
 
-html, body { height: 100%; }
+html, body {
+  height: 100%;
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Prevent unwanted iOS callout menus on long press, preserving form inputs */
+*:not(input):not(textarea) {
+  -webkit-touch-callout: none;
+}
 
 /* opaque app surface — panels sit on the map, so they stay solid & readable */
 .surface {
@@ -240,9 +249,13 @@ html, body { height: 100%; }
   75%, 100% { transform: scale(1.7); opacity: 0; }
 }
 
-/* smooth glide between GPS fixes; frozen during zoom animation */
+/* smooth glide between GPS fixes; frozen during zoom/pan/flyTo movement */
 .leaflet-marker-icon.veh-marker { transition: transform 0.9s linear; }
-.leaflet-zoom-anim .leaflet-marker-icon.veh-marker { transition: none; }
+.leaflet-zoom-anim .leaflet-marker-icon,
+.leaflet-pan-anim .leaflet-marker-icon,
+.map-moving .leaflet-marker-icon {
+  transition: none !important;
+}
 .leaflet-marker-icon.veh-marker:hover { z-index: 10000 !important; }
 
 /* ---------- leaflet dark skin ---------- */

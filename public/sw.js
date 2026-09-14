@@ -1,23 +1,50 @@
 /**
- * Minimal service worker for PWA installability + offline app shell.
+ * Service worker for PWA installability + offline app shell.
  *
- * Deliberately conservative:
- *  - /api/* is NEVER touched — live vehicle data must not be served stale;
+ * Strategy:
+ *  - /api/* is NEVER cached — live vehicle and stop data must not be served stale;
  *  - cross-origin requests (map tiles, OSRM) pass through untouched;
- *  - hashed build assets (/_next/static) and static icons are cache-first
- *    (content-addressed, safe forever);
- *  - navigations are network-first with the cached shell as offline fallback.
- *
- * Bump CACHE on breaking changes to the caching strategy (old caches are
- * dropped on activate).
+ *  - pre-caches app shell and icons on install for immediate offline readiness;
+ *  - hashed build assets (/_next/static) and static assets are cache-first;
+ *  - navigations are network-first with cached shell fallback.
  */
-const CACHE = "kb-shell-v1";
+const CACHE = "kb-shell-v2";
 const SHELL = "/";
+
+const PRECACHE_URLS = [
+  "/",
+  "/manifest.webmanifest",
+  "/favicon.ico",
+  "/favicon.svg",
+  "/apple-touch-icon.png",
+  "/icon-192.png",
+  "/icon-512.png",
+  "/icon-maskable-192.png",
+  "/icon-maskable-512.png",
+];
+
+/* Pre-cache the app shell and core assets on install */
+self.addEventListener("install", (event) => {
+  event.waitUntil(
+    (async () => {
+      const cache = await caches.open(CACHE);
+      await Promise.allSettled(
+        PRECACHE_URLS.map(async (url) => {
+          try {
+            const resp = await fetch(url, { cache: "no-cache" });
+            if (resp.ok) await cache.put(url, resp);
+          } catch {
+            // Ignore transient network errors during install
+          }
+        }),
+      );
+    })(),
+  );
+});
 
 /* No skipWaiting on install: a new SW waits until the page approves it via the
  * SKIP_WAITING message (PwaRegister's update toast). Auto-activating would swap
- * hashed /_next chunks under a running SPA and break lazy chunk loads. A first
- * install has nothing to wait behind, so first visits are unaffected. */
+ * hashed /_next chunks under a running SPA and break lazy chunk loads. */
 self.addEventListener("message", (event) => {
   if (event.data && event.data.type === "SKIP_WAITING") self.skipWaiting();
 });

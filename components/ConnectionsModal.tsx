@@ -580,7 +580,7 @@ function ConnectionsDialog({
                       setConnections(null);
                     }
                   }}
-                  className="w-full min-w-0 bg-transparent text-[13px] font-medium text-text placeholder:text-text-faint outline-none focus:outline-none focus-visible:outline-none ring-0 focus:ring-0"
+                  className="w-full min-w-0 bg-transparent text-base md:text-[13px] font-medium text-text placeholder:text-text-faint outline-none focus:outline-none focus-visible:outline-none ring-0 focus:ring-0"
                 />
                 {(fromStop || fromQuery) && (
                   <button
@@ -625,7 +625,7 @@ function ConnectionsDialog({
                       setConnections(null);
                     }
                   }}
-                  className="w-full min-w-0 bg-transparent text-[13px] font-medium text-text placeholder:text-text-faint outline-none focus:outline-none focus-visible:outline-none ring-0 focus:ring-0"
+                  className="w-full min-w-0 bg-transparent text-base md:text-[13px] font-medium text-text placeholder:text-text-faint outline-none focus:outline-none focus-visible:outline-none ring-0 focus:ring-0"
                 />
                 {(toStop || toQuery) && (
                   <button
