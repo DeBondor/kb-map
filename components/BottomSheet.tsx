@@ -48,7 +48,7 @@ export default function BottomSheet({
   onClose,
   desktop,
   ariaLabel,
-  initialSnap = "half",
+  initialSnap = "full",
   dismissOnDrag = false,
   header,
   children,
@@ -58,11 +58,27 @@ export default function BottomSheet({
   const [mounted, setMounted] = useState(false);
 
   const sheetRef = useRef<HTMLElement>(null);
+  const headerRef = useRef<HTMLDivElement>(null);
+  const [headerHeight, setHeaderHeight] = useState(160);
   const restoreRef = useRef<HTMLElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const snapRef = useRef<Snap>(initialSnap);
   const currentYRef = useRef<number>(0);
   const isDraggingRef = useRef(false);
+
+  // Measure header height dynamically to bound content container precisely within viewport
+  useEffect(() => {
+    if (!headerRef.current) return;
+    const el = headerRef.current;
+    const update = () => {
+      const h = el.offsetHeight;
+      if (h > 0) setHeaderHeight(h);
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   const startRef = useRef<{
     id: number;
@@ -374,17 +390,17 @@ export default function BottomSheet({
       aria-label={ariaLabel}
       data-snap={snap}
       className={`surface absolute inset-x-0 bottom-0 z-[1001] flex flex-col overflow-hidden rounded-t-[28px] outline-none border-t border-hairline ${
-        isDragging ? "select-none" : ""
-      }`}
+        mounted ? "" : "translate-y-full"
+      } ${isDragging ? "select-none" : ""}`}
       style={{
         height: `${FULL * 100}dvh`,
-        ...(mounted ? {} : { transform: "translate3d(0, 100%, 0)" }),
         willChange: isDragging ? "transform" : undefined,
         boxShadow: "var(--shadow-sheet)",
         paddingBottom: "env(safe-area-inset-bottom, 0px)",
       }}
     >
       <div
+        ref={headerRef}
         className="shrink-0 cursor-grab active:cursor-grabbing select-none"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -392,19 +408,12 @@ export default function BottomSheet({
         onPointerCancel={onPointerCancel}
         style={{ touchAction: "none" }}
       >
-        <div className="flex w-full items-center justify-center pt-3 pb-1" aria-hidden>
-          <div className="h-1 w-9 rounded-full bg-white/35 transition-colors hover:bg-white/50 active:bg-white/60" />
+        <div className="flex w-full items-center justify-center py-2.5" aria-hidden>
+          <div className="h-1.5 w-10 rounded-full bg-white/35 transition-colors hover:bg-white/50 active:bg-white/60" />
         </div>
         {header}
       </div>
-      <div
-        className="relative min-h-0 flex-1"
-        style={{
-          touchAction: "pan-y",
-          paddingBottom: `${baseY(snap)}px`,
-          transition: isDragging ? "none" : "padding-bottom 0.38s var(--ease-spring)",
-        }}
-      >
+      <div className="relative min-h-0 flex-1 overflow-hidden" style={{ touchAction: "pan-y" }}>
         <div
           className="pointer-events-none absolute inset-x-0 top-0 z-10 h-3 bg-gradient-to-b from-surface to-transparent"
           aria-hidden

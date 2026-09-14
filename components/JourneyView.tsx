@@ -134,7 +134,7 @@ function JourneyView({
       {/* Timeline of legs and transfers */}
       <div
         className="divide-y divide-hairline px-4 py-3 sm:px-5 space-y-4 overflow-y-auto h-full"
-        style={{ paddingBottom: "max(5rem, calc(3rem + env(safe-area-inset-bottom, 24px)))" }}
+        style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1.25rem)" }}
       >
         {legs.map((leg, lIdx) => {
           const color = hslColor(leg.line);

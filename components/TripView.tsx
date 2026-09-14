@@ -47,7 +47,7 @@ function Spinner() {
 
 function TimelineSkeleton() {
   return (
-    <div aria-hidden className="px-5 pt-2 pb-20" style={{ paddingBottom: "max(5rem, calc(3rem + env(safe-area-inset-bottom, 24px)))" }}>
+    <div aria-hidden className="px-5 pt-2" style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1.25rem)" }}>
       {Array.from({ length: 8 }, (_, i) => (
         <div key={i} className="flex items-center gap-4 py-3">
           <div className="skeleton h-3.5 w-10" />
@@ -234,8 +234,8 @@ function TripView({ trip, desktop, vehMeta, liveVeh, onBack, onClose, onFocusSto
       desktop={desktop}
       onClose={onClose}
       ariaLabel={`Trasa linii ${trip.line}`}
-      /* opens at half (2/4) screen so route & timeline are balanced; swipe up to 3/4 or down to peek */
-      initialSnap="half"
+      /* opens at 3/4 screen revealing the route down to the bottom of the modal while keeping top map open */
+      initialSnap="full"
       header={header}
     >
       <div ref={scrollRef} className="kb-scroll h-full overflow-y-auto">
@@ -244,7 +244,7 @@ function TripView({ trip, desktop, vehMeta, liveVeh, onBack, onClose, onFocusSto
         ) : loading ? (
           <TimelineSkeleton />
         ) : (
-          <ol className="px-4 pt-1 pb-20" style={{ paddingBottom: "max(5rem, calc(3rem + env(safe-area-inset-bottom, 24px)))" }}>
+          <ol className="px-4 pt-1" style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1.25rem)" }}>
             {trip.rawTimes.map((t, idx) => {
               const isCurrent = vti != null && idx === vti;
               const passed = vti != null && idx < vti;

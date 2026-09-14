@@ -268,7 +268,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
           ) : liveRows && liveRows.length === 0 ? (
             <EmptyState text="Brak przyjazdów w najbliższych godzinach." />
           ) : (
-            <ul className="stagger px-2 pb-20" style={{ paddingBottom: "max(5rem, calc(3rem + env(safe-area-inset-bottom, 24px)))" }}>
+            <ul className="stagger px-2" style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1.25rem)" }}>
               {(liveRows ?? []).map((row, i) => {
                 const liveVeh =
                   (row.trip_execution_id ? vehByExec.get(row.trip_execution_id) : null) ??
@@ -346,7 +346,7 @@ function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, 
         ) : tt.length === 0 ? (
           <EmptyState text="Brak odjazdów dziś." />
         ) : (
-          <ul className="stagger px-2 pb-20" style={{ paddingBottom: "max(5rem, calc(3rem + env(safe-area-inset-bottom, 24px)))" }}>
+          <ul className="stagger px-2" style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 1.25rem)" }}>
             {tt.map(({ dp, line, dir }, i) => (
               <li key={`${dp.trip_id}-${i}`}>
                 <button
