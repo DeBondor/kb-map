@@ -591,6 +591,18 @@ export class LivePoller {
               pos.anchorLon = prev.anchorLon;
               pos.lastMovedAt = prev.lastMovedAt;
             }
+
+            // Heading points in the actual direction the vehicle is moving
+            const stepDist = metersBetween(pos.lat, pos.lon, prev.lat, prev.lon);
+            if (stepDist >= 8) {
+              const moveBrg = bearing(prev.lat, prev.lon, pos.lat, pos.lon);
+              if (moveBrg !== null) {
+                pos.bearing = moveBrg;
+              }
+            } else if (prev.bearing !== null) {
+              // Retain heading while stopped (at a stop, traffic lights, etc.)
+              pos.bearing = prev.bearing;
+            }
           }
           this.positions.set(eid, pos);
           this.notFound.delete(eid);
@@ -702,13 +714,12 @@ export class LivePoller {
       }
     }
 
-    // ---- bearing toward the next stop ----
-    let brg: number | null = null;
+    // Next stop information (heading is determined by actual vehicle movement, not route line)
+    const brg: number | null = null;
     let nextName: string | null = null;
     let nextLat: number | null = null;
     let nextLon: number | null = null;
     if (targetIdx !== null) {
-      // when stopped at the stop, point toward the following one
       const idx = atStop && isIdx(vti) && targetIdx === vti ? targetIdx + 1 : targetIdx;
       if (idx >= 0 && idx < times.length) {
         const entry = times[idx];
@@ -716,13 +727,9 @@ export class LivePoller {
           const c = this.stopCoords(entry);
           if (c !== null) {
             const [clat, clon] = c;
-            const b = bearing(lat, lon, clat, clon);
-            if (b !== null) {
-              brg = b;
-              nextName = pyTruthy(entry.stop_name) ? String(entry.stop_name) : "";
-              nextLat = clat;
-              nextLon = clon;
-            }
+            nextName = pyTruthy(entry.stop_name) ? String(entry.stop_name) : "";
+            nextLat = clat;
+            nextLon = clon;
           }
         }
       }
@@ -789,6 +796,54 @@ export class LivePoller {
         !this.isStale(v, nowEpoch) &&
         nowEpoch - v.updatedAt <= config.LIVE_STALE_VEHICLE_SEC,
     );
+  }
+
+  /**
+   * Immediately register candidate trip execution IDs to discover and track,
+   * e.g. when stop departures are requested by a client.
+   */
+  addCandidates(eids: string[]): void {
+    const needed = eids.filter((eid) => eid && !this.positions.has(eid));
+    if (needed.length === 0) return;
+    void this.fetchPositions(needed.map((eid): [string, number] => [eid, 0])).catch((err) => {
+      log.error("rt", `addCandidates background fetch failed: ${err}`);
+    });
+  }
+
+  /**
+   * Immediately ingest a trip execution record into live positions,
+   * e.g. when a client opens a live trip execution.
+   */
+  ingestTripExecution(eid: string, resp: Record<string, unknown>): VehiclePos | null {
+    if (!pyTruthy(resp)) return null;
+    const pos = this.parsePosition(eid, resp);
+    if (!pos) return null;
+    const nowTs = Math.floor(Date.now() / 1000);
+    const prev = this.positions.get(eid);
+    if (prev) {
+      const moved = metersBetween(pos.lat, pos.lon, prev.anchorLat, prev.anchorLon);
+      if (moved > config.LIVE_STALE_MOVE_EPS_M) {
+        pos.anchorLat = pos.lat;
+        pos.anchorLon = pos.lon;
+        pos.lastMovedAt = pos.updatedAt;
+      } else {
+        pos.anchorLat = prev.anchorLat;
+        pos.anchorLon = prev.anchorLon;
+        pos.lastMovedAt = prev.lastMovedAt;
+      }
+      const stepDist = metersBetween(pos.lat, pos.lon, prev.lat, prev.lon);
+      if (stepDist >= 8) {
+        const moveBrg = bearing(prev.lat, prev.lon, pos.lat, pos.lon);
+        if (moveBrg !== null) pos.bearing = moveBrg;
+      } else if (prev.bearing !== null) {
+        pos.bearing = prev.bearing;
+      }
+    }
+    this.positions.set(eid, pos);
+    this.notFound.delete(eid);
+    this.lastGoodRefresh = nowTs;
+    this.snapshotVersion += 1;
+    return pos;
   }
 
   /** Count of vehicles currently shown on the map (excludes frozen ghosts). */

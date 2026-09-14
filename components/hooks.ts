@@ -6,13 +6,15 @@ import { swrFetcher } from "@/lib/client/api";
 import { nowSecs } from "@/lib/client/format";
 import type { LinesResponse, StopsResponse, VehiclesResponse } from "@/lib/client/types";
 
-/** Live vehicle positions, polled every 5 s, never HTTP-cached. */
+/** Live vehicle positions, polled every 4 s, never HTTP-cached. */
 export function useVehicles() {
   return useSWR<VehiclesResponse>("/api/vehicles", swrFetcher, {
-    refreshInterval: 5000,
-    dedupingInterval: 2500,
+    refreshInterval: 4000,
+    dedupingInterval: 1500,
     keepPreviousData: true,
     revalidateOnFocus: true,
+    revalidateOnReconnect: true,
+    refreshWhenHidden: true,
   });
 }
 

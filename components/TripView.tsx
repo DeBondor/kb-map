@@ -15,7 +15,6 @@ import {
   hhmmFromSecs,
   hslColor,
   isBusStation,
-  przystanekPlural,
   secsFromHHMM,
   tripTimeMatchesStop,
 } from "@/lib/client/format";
@@ -135,11 +134,12 @@ function TripView({ trip, desktop, vehMeta, liveVeh, onBack, onClose, onFocusSto
   const activeStopIndex = activeStop.index;
   const isAtStop = activeStop.isAtStop;
   const vti = activeStopIndex;
-  const eta = loading || failed ? "" : computeEta(trip, now, vti, isAtStop);
-  const remainingStops =
-    activeStopIndex != null ? Math.max(0, trip.rawTimes.length - activeStopIndex) : 0;
-  const isCompleted =
-    activeStopIndex != null && activeStopIndex >= trip.rawTimes.length - 1 && isAtStop;
+  const headerDelay =
+    (liveVeh ?? lastLive.veh)?.delay ??
+    vehMeta?.delay ??
+    trip.rawTimes[vti ?? -1]?.estimate?.time_diff ??
+    null;
+  const eta = loading || failed ? "" : computeEta(trip, now, vti, isAtStop, headerDelay);
 
   /** schedule index → resolved physical stop (for fly-to on tap) */
   const stopByIndex = useMemo(() => {
@@ -155,11 +155,6 @@ function TripView({ trip, desktop, vehMeta, liveVeh, onBack, onClose, onFocusSto
   }, [vti, trip.status, trip.gen]);
 
   const direction = trip.direction || vehMeta?.headsign || "";
-  const headerDelay =
-    (liveVeh ?? lastLive.veh)?.delay ??
-    vehMeta?.delay ??
-    trip.rawTimes[vti ?? -1]?.estimate?.time_diff ??
-    null;
   /* stops this course loops through (e.g. the SZCZYRK BIŁA spur on some 120s) —
      shown as a "przez …" badge so a via-the-loop run is obvious */
   const loopStops = useMemo(() => detectLoopStops(trip.rawTimes), [trip.rawTimes]);
@@ -191,13 +186,6 @@ function TripView({ trip, desktop, vehMeta, liveVeh, onBack, onClose, onFocusSto
             {isLiveWithLoc && headerDelay != null && (
               <span className={`font-semibold tabular-nums ${delayClass(headerDelay)}`}>
                 {delayTxt(headerDelay)}
-              </span>
-            )}
-            {!loading && !failed && trip.rawTimes.length > 0 && (
-              <span className="rounded-full bg-surface-2 px-2 py-0.5 font-semibold tabular-nums text-text-mute">
-                {isCompleted
-                  ? "Koniec trasy"
-                  : `Pozostało: ${remainingStops} ${przystanekPlural(remainingStops)}`}
               </span>
             )}
             {trip.note && (
@@ -261,10 +249,11 @@ function TripView({ trip, desktop, vehMeta, liveVeh, onBack, onClose, onFocusSto
               const isCurrent = vti != null && idx === vti;
               const passed = vti != null && idx < vti;
               const diff = t.estimate?.time_diff ?? null;
+              const effectiveDiff = diff ?? (isLiveWithLoc && !passed ? headerDelay : null);
               const planned = secsFromHHMM(t.departure_time);
-              const est = isLiveWithLoc && diff != null && planned != null;
-              const shown = est ? hhmmFromSecs((planned as number) + (diff as number)) : t.departure_time;
-              const bigDiff = est && Math.abs(diff as number) > 60;
+              const est = isLiveWithLoc && effectiveDiff != null && planned != null;
+              const shown = est ? hhmmFromSecs((planned as number) + (effectiveDiff as number)) : t.departure_time;
+              const bigDiff = est && Math.abs(effectiveDiff as number) > 60;
               const selected = !!trip.stop && tripTimeMatchesStop(t, trip.stop);
               const coord = stopByIndex.get(t.index);
               const first = idx === 0;
@@ -282,7 +271,7 @@ function TripView({ trip, desktop, vehMeta, liveVeh, onBack, onClose, onFocusSto
                     {/* time */}
                     <span
                       className={`w-12 shrink-0 self-center pl-1 text-right text-[13px] font-semibold tabular-nums ${
-                        passed ? "text-text-faint" : est ? delayClass(diff) : "text-text"
+                        passed ? "text-text-faint" : est ? delayClass(effectiveDiff) : "text-text"
                       }`}
                     >
                       {shown}

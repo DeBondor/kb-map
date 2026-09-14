@@ -124,3 +124,25 @@ describe("nowSecs (agency-local clock)", () => {
     assert.ok(diff <= 2 || diff >= 86398, `got=${got} expected=${expected}`);
   });
 });
+
+describe("movement bearing determination", () => {
+  it("calculates movement bearing when vehicle moves beyond jitter threshold", () => {
+    // Bus moves east along a street
+    const p1 = { lat: 49.8225, lon: 19.0444 };
+    const p2 = { lat: 49.8225, lon: 19.0460 };
+    const dist = metersBetween(p1.lat, p1.lon, p2.lat, p2.lon);
+    assert.ok(dist >= 8, `distance should exceed threshold, was ${dist}`);
+    const b = bearing(p1.lat, p1.lon, p2.lat, p2.lon);
+    assert.ok(b !== null);
+    assert.ok(Math.abs(b - 90) < 1, `bearing should be ~90 (east), got ${b}`);
+  });
+
+  it("identifies movement south-west", () => {
+    const p1 = { lat: 49.8225, lon: 19.0444 };
+    const p2 = { lat: 49.8200, lon: 19.0400 };
+    const b = bearing(p1.lat, p1.lon, p2.lat, p2.lon);
+    assert.ok(b !== null);
+    assert.ok(b > 180 && b < 270, `bearing should be SW, got ${b}`);
+  });
+});
+

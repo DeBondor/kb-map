@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import BottomSheet from "@/components/BottomSheet";
 import { useNow } from "@/components/hooks";
 import { CloseIcon, EmptyState, ErrorState, IconButton, LineBadge, ShareButton, SkeletonRows, StarIcon } from "@/components/ui";
@@ -24,6 +24,7 @@ import type {
   TimetableDeparture,
   TimetableResponse,
   Trip,
+  Vehicle,
 } from "@/lib/client/types";
 
 type Tab = "live" | "tt";
@@ -31,9 +32,11 @@ type Tab = "live" | "tt";
 interface Props {
   stop: Stop;
   desktop: boolean;
+  vehicles?: Vehicle[];
   onClose: () => void;
   onShowLive: (execId: string, tripId: string | number | null) => void;
   onShowStatic: (tripId: string | number) => void;
+  onPlanRoute?: (s: Stop) => void;
 }
 
 interface TtRow {
@@ -50,8 +53,24 @@ function Chevron() {
   );
 }
 
-function StopView({ stop, desktop, onClose, onShowLive, onShowStatic }: Props) {
+function StopView({ stop, desktop, vehicles, onClose, onShowLive, onShowStatic, onPlanRoute }: Props) {
   const [tab, setTab] = useState<Tab>("live");
+
+  const vehByExec = useMemo(() => {
+    const m = new Map<string, Vehicle>();
+    for (const v of vehicles ?? []) {
+      if (v.id) m.set(v.id, v);
+    }
+    return m;
+  }, [vehicles]);
+
+  const vehByTrip = useMemo(() => {
+    const m = new Map<string, Vehicle>();
+    for (const v of vehicles ?? []) {
+      if (v.trip_id) m.set(String(v.trip_id), v);
+    }
+    return m;
+  }, [vehicles]);
   const [liveRows, setLiveRows] = useState<DepartureRow[] | null>(null);
   /* mirrors liveRows so the refresh closure can tell "have data" without going
      stale — a failed 30 s background refresh must not nuke a list we show */
@@ -138,6 +157,7 @@ function StopView({ stop, desktop, onClose, onShowLive, onShowStatic }: Props) {
             batch.map(async (tid) => {
               const tr = await getTrip(tid, ac.signal);
               tripMap.set(tid, tr);
+              return tr;
             }),
           );
         }
@@ -174,6 +194,15 @@ function StopView({ stop, desktop, onClose, onShowLive, onShowStatic }: Props) {
             {isBusStation(stop.name, stop) ? "Dworzec autobusowy" : "Przystanek autobusowy"}
           </p>
         </div>
+        {onPlanRoute && (
+          <IconButton label="Wyznacz trasę stąd" onClick={() => onPlanRoute(stop)}>
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <circle cx="6" cy="19" r="3" />
+              <path d="M9 19h8.5a4.5 4.5 0 0 0 0-9H7a4 4 0 0 1 0-8h11" />
+              <polyline points="15 5 18 2 21 5" />
+            </svg>
+          </IconButton>
+        )}
         <ShareButton title={`Przystanek ${displayStopName(stop.name)}`} />
         <IconButton
           label={fav ? "Usuń z ulubionych" : "Dodaj do ulubionych"}
@@ -243,19 +272,28 @@ function StopView({ stop, desktop, onClose, onShowLive, onShowStatic }: Props) {
           ) : (
             <ul className="stagger px-2">
               {(liveRows ?? []).map((row, i) => {
-                const planned = row.static_time || row.time || "";
-                const td = row.time_diff;
-                const est = !!row.is_estimated && td != null;
-                const actual = est && row.time?.includes(":") ? row.time : planned;
+                const liveVeh =
+                  (row.trip_execution_id ? vehByExec.get(row.trip_execution_id) : null) ??
+                  (row.trip_id != null ? vehByTrip.get(String(row.trip_id)) : null);
+                const planned = row.static_time || (row.time?.includes(":") ? row.time : "");
+                const td = liveVeh?.delay != null ? liveVeh.delay : (row.is_estimated ? row.time_diff : null);
+                const est = (liveVeh != null && liveVeh.delay != null) || (!!row.is_estimated && td != null);
+                const plannedSecs = secsFromHHMM(planned);
+                const actualSecs = est && plannedSecs != null && td != null ? plannedSecs + td : null;
                 const line = row.line_name || row.symbol || "?";
-                const plannedIsTime = planned.includes(":");
                 const plat = formatPlatform(row.platform, isStation);
                 const sub = [
-                  plannedIsTime ? `plan ${planned}` : "",
+                  planned ? `plan ${planned}` : "",
                   plat,
                 ]
                   .filter(Boolean)
                   .join(" · ");
+
+                const timeText =
+                  actualSecs != null
+                    ? countdown(actualSecs, now) || planned || row.time || ""
+                    : row.time || planned || "";
+
                 return (
                   <li key={i}>
                     <button
@@ -274,7 +312,7 @@ function StopView({ stop, desktop, onClose, onShowLive, onShowStatic }: Props) {
                       </div>
                       <div className="shrink-0 text-right">
                         <p className={`text-[15px] font-bold tabular-nums ${est ? delayClass(td) : "text-text"}`}>
-                          {est ? countdown(secsFromHHMM(actual), now) || planned : planned}
+                          {timeText}
                         </p>
                         {est ? (
                           <p className={`text-[11px] font-medium tabular-nums ${delayClass(td)}`}>

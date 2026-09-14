@@ -1,6 +1,6 @@
 import { badRequest, upstreamError } from "@/lib/api-helpers";
-import { parseIntStrict, pyTruthy } from "@/lib/kb-api";
-import { getApi, startPoller } from "@/lib/poller-singleton";
+import { isRecord, parseIntStrict, pyTruthy } from "@/lib/kb-api";
+import { getApi, getPoller, startPoller } from "@/lib/poller-singleton";
 import { allowRequest, clientIp, tooManyRequests } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
@@ -20,7 +20,15 @@ export async function GET(req: Request): Promise<Response> {
   try {
     await startPoller();
     const data = await getApi().fetchTripExecution(execId, index);
-    return Response.json(pyTruthy(data) ? data : {});
+    if (pyTruthy(data) && isRecord(data)) {
+      getPoller().ingestTripExecution(execId, data);
+    }
+    return Response.json(pyTruthy(data) ? data : {}, {
+      headers: {
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        Pragma: "no-cache",
+      },
+    });
   } catch (err) {
     return upstreamError("trip_execution", err);
   }

@@ -249,6 +249,7 @@ export function computeEta(
   now: number,
   liveVti?: number | null,
   isAtStop?: boolean,
+  liveDelay?: number | null,
 ): string {
   const { stop, rawTimes, isLive } = trip;
   const vti = liveVti ?? trip.vti;
@@ -262,7 +263,7 @@ export function computeEta(
       rawTimes.find(matches);
     if (st) {
       const planned = secsFromHHMM(st.departure_time);
-      const est = st.estimate?.time_diff;
+      const est = st.estimate?.time_diff ?? (isLive ? (liveDelay ?? null) : null);
       if (planned != null) {
         const arr = planned + (est ?? 0);
         let delta = arr - now;
@@ -315,4 +316,80 @@ export function przystanekPlural(n: number): string {
   if (tens >= 11 && tens <= 14) return "przystanków";
   if (ones >= 2 && ones <= 4) return "przystanki";
   return "przystanków";
+}
+
+/** "HH:MM" in Europe/Warsaw agency timezone — guaranteed 24-hour format (00:00 to 23:59). */
+export function nowHHMM(): string {
+  const s = nowSecs();
+  const h = Math.floor(s / 3600) % 24;
+  const m = Math.floor((s % 3600) / 60);
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+/** Adds minutes to a 24-hour "HH:MM" string, wrapping around 24 hours. */
+export function addMinutesToHHMM(hhmm: string, deltaMins: number): string {
+  const parts = hhmm.split(":").map(Number);
+  const curH = parts[0] || 0;
+  const curM = parts[1] || 0;
+  const totalMins = ((curH * 60 + curM + deltaMins) % 1440 + 1440) % 1440;
+  const h = Math.floor(totalMins / 60);
+  const m = totalMins % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+/** Offset an ISO date "YYYY-MM-DD" by `days` days. */
+export function offsetDateISO(dateISO: string, days: number): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateISO);
+  if (!m) return dateISO;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + days));
+  const y = d.getUTCFullYear();
+  const mo = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const da = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${mo}-${da}`;
+}
+
+let dayLabelFmt: Intl.DateTimeFormat | null = null;
+let dayFullFmt: Intl.DateTimeFormat | null = null;
+
+/**
+ * Returns human-friendly Polish day label for an ISO date:
+ * "Dziś", "Jutro", "Pojutrze", or "Wt., 15 wrz".
+ */
+export function formatDayLabel(dateISO: string, referenceTodayISO?: string): string {
+  const today = referenceTodayISO ?? todayISO();
+  if (dateISO === today) return "Dziś";
+  if (dateISO === offsetDateISO(today, 1)) return "Jutro";
+  if (dateISO === offsetDateISO(today, 2)) return "Pojutrze";
+
+  try {
+    const [y, mo, da] = dateISO.split("-").map(Number);
+    const d = new Date(Date.UTC(y, mo - 1, da, 12, 0, 0));
+    dayLabelFmt ??= new Intl.DateTimeFormat("pl-PL", {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      timeZone: "Europe/Warsaw",
+    });
+    const str = dayLabelFmt.format(d);
+    return str.charAt(0).toUpperCase() + str.slice(1);
+  } catch {
+    return dateISO;
+  }
+}
+
+/** Full Polish date description, e.g. "wtorek, 15 września". */
+export function formatDayFull(dateISO: string): string {
+  try {
+    const [y, mo, da] = dateISO.split("-").map(Number);
+    const d = new Date(Date.UTC(y, mo - 1, da, 12, 0, 0));
+    dayFullFmt ??= new Intl.DateTimeFormat("pl-PL", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      timeZone: "Europe/Warsaw",
+    });
+    return dayFullFmt.format(d);
+  } catch {
+    return dateISO;
+  }
 }

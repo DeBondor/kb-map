@@ -207,6 +207,14 @@ describe("computeEta", () => {
     assert.equal(computeEta(trip, 36000), "na TESTOWA: 10:00 · za 0 min");
   });
 
+  it("uses liveDelay fallback when time estimate is absent", () => {
+    const trip = view({
+      stop,
+      rawTimes: [time({ designator: 123 })],
+    });
+    assert.equal(computeEta(trip, 36000, null, false, 480), "na TESTOWA: 10:08 (+8 min) · za 8 min");
+  });
+
   it("static: planned arrival only", () => {
     const trip = view({ isLive: false, stop, rawTimes: [time({ designator: 123 })] });
     assert.equal(computeEta(trip, 36000), "planowany przyjazd 10:00");
@@ -276,5 +284,47 @@ describe("przystanekPlural", () => {
     assert.equal(przystanekPlural(14), "przystanków");
     assert.equal(przystanekPlural(22), "przystanki");
     assert.equal(przystanekPlural(25), "przystanków");
+  });
+});
+
+describe("24h time and Polish date formatting", () => {
+  it("nowHHMM formats strictly in 24h HH:MM", async () => {
+    const { nowHHMM } = await import("../lib/client/format");
+    const t = nowHHMM();
+    assert.match(t, /^([01]\d|2[0-3]):[0-5]\d$/);
+  });
+
+  it("addMinutesToHHMM wraps around 24 hours cleanly", async () => {
+    const { addMinutesToHHMM } = await import("../lib/client/format");
+    assert.equal(addMinutesToHHMM("14:30", 15), "14:45");
+    assert.equal(addMinutesToHHMM("14:30", 45), "15:15");
+    assert.equal(addMinutesToHHMM("23:45", 30), "00:15");
+    assert.equal(addMinutesToHHMM("00:15", -30), "23:45");
+    assert.equal(addMinutesToHHMM("08:00", 60), "09:00");
+  });
+
+  it("offsetDateISO offsets YYYY-MM-DD by days", async () => {
+    const { offsetDateISO } = await import("../lib/client/format");
+    assert.equal(offsetDateISO("2026-09-13", 1), "2026-09-14");
+    assert.equal(offsetDateISO("2026-09-13", 2), "2026-09-15");
+    assert.equal(offsetDateISO("2026-09-30", 1), "2026-10-01");
+    assert.equal(offsetDateISO("2026-09-14", -1), "2026-09-13");
+  });
+
+  it("formatDayLabel returns Dziś, Jutro, Pojutrze or short Polish date", async () => {
+    const { formatDayLabel } = await import("../lib/client/format");
+    const refToday = "2026-09-13";
+    assert.equal(formatDayLabel("2026-09-13", refToday), "Dziś");
+    assert.equal(formatDayLabel("2026-09-14", refToday), "Jutro");
+    assert.equal(formatDayLabel("2026-09-15", refToday), "Pojutrze");
+    const other = formatDayLabel("2026-09-16", refToday);
+    assert.ok(other.length > 0);
+  });
+
+  it("formatDayFull returns full Polish description", async () => {
+    const { formatDayFull } = await import("../lib/client/format");
+    const full = formatDayFull("2026-09-15");
+    assert.ok(full.includes("15"));
+    assert.ok(full.includes("września"));
   });
 });

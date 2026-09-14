@@ -7,7 +7,6 @@ import {
   COLOR_AT_STOP,
   COLOR_EARLY,
   COLOR_LATE,
-  formatScan,
 } from "@/lib/client/format";
 
 export type BaseLayerId = "kb" | "dark";
@@ -73,8 +72,6 @@ export const RASTER_FALLBACK: Record<BaseLayerId, { url: string; attribution: st
 
 interface Props {
   count: number | null;
-  lastScan: number | null;
-  scanCount: number | null;
   offline: boolean;
   stopsVisible: boolean;
   onToggleStops: () => void;
@@ -101,8 +98,6 @@ function LegendDot({ color, label }: { color: string; label: string }) {
 
 function TopBar({
   count,
-  lastScan,
-  scanCount,
   offline,
   stopsVisible,
   onToggleStops,
@@ -268,23 +263,6 @@ function TopBar({
             <LegendDot color={COLOR_AT_STOP} label="na przystanku" />
             <LegendDot color={COLOR_LATE} label="opóźniony" />
             <LegendDot color={COLOR_EARLY} label="przed czasem" />
-          </div>
-
-          <div className="mt-4 border-t border-hairline pt-3 text-[11px] text-text-faint">
-            <p>
-              Ostatni skan:{" "}
-              <span className="tabular-nums text-text-mute">{formatScan(lastScan, scanCount)}</span>
-            </p>
-            <p className="mt-1">
-              GTFS-RT:{" "}
-              <a href="/api/gtfs-rt.pb" target="_blank" rel="noopener" className="font-medium text-primary underline-offset-2 hover:underline">
-                .pb
-              </a>{" "}
-              ·{" "}
-              <a href="/api/vehicles" target="_blank" rel="noopener" className="font-medium text-primary underline-offset-2 hover:underline">
-                JSON
-              </a>
-            </p>
           </div>
         </div>
       )}

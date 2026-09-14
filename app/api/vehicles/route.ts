@@ -8,7 +8,12 @@ export const runtime = "nodejs";
 export async function GET(): Promise<Response> {
   try {
     await startPoller();
-    return Response.json(getPoller().toJson());
+    return Response.json(getPoller().toJson(), {
+      headers: {
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        Pragma: "no-cache",
+      },
+    });
   } catch (err) {
     return upstreamError("vehicles", err);
   }
