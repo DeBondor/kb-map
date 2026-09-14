@@ -34,6 +34,7 @@ interface Props {
   onClose: () => void;
   onFocusStop: (s: Stop) => void;
   onRetry: () => void;
+  initialSnap?: "peek" | "half" | "full";
 }
 
 function Spinner() {
@@ -59,7 +60,17 @@ function TimelineSkeleton() {
   );
 }
 
-function TripView({ trip, desktop, vehMeta, liveVeh, onBack, onClose, onFocusStop, onRetry }: Props) {
+function TripView({
+  trip,
+  desktop,
+  vehMeta,
+  liveVeh,
+  onBack,
+  onClose,
+  onFocusStop,
+  onRetry,
+  initialSnap = "half",
+}: Props) {
   const now = useNow();
   const scrollRef = useRef<HTMLDivElement>(null);
   const currentRef = useRef<HTMLLIElement>(null);
@@ -234,8 +245,8 @@ function TripView({ trip, desktop, vehMeta, liveVeh, onBack, onClose, onFocusSto
       desktop={desktop}
       onClose={onClose}
       ariaLabel={`Trasa linii ${trip.line}`}
-      /* opens at 3/4 screen revealing the route down to the bottom of the modal while keeping top map open */
-      initialSnap="full"
+      /* opens at half (2/4) screen so route & map vehicle are both visible; swipe up to 3/4 or down to peek */
+      initialSnap={initialSnap}
       header={header}
     >
       <div ref={scrollRef} className="kb-scroll h-full overflow-y-auto">

@@ -946,6 +946,7 @@ export default function MapApp() {
           onClose={handleCloseAll}
           onFocusStop={handleFocusStop}
           onRetry={retryTrip}
+          initialSnap="half"
         />
       ) : journey ? (
         <JourneyView

@@ -48,7 +48,7 @@ export default function BottomSheet({
   onClose,
   desktop,
   ariaLabel,
-  initialSnap = "full",
+  initialSnap = "half",
   dismissOnDrag = false,
   header,
   children,
