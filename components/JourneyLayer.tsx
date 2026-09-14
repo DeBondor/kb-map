@@ -1,0 +1,198 @@
+"use client";
+
+import { memo, useEffect, useMemo } from "react";
+import { CircleMarker, Marker, Polyline, Tooltip, useMap } from "react-leaflet";
+import L from "leaflet";
+import { displayStopName, hslColor } from "@/lib/client/format";
+import { makeJourneyPinIcon } from "@/lib/client/leafletIcons";
+import { prefersReducedMotion } from "@/lib/client/motion";
+import type { JourneyView, LatLng } from "@/lib/client/types";
+
+interface Props {
+  journey: JourneyView | null;
+  desktop: boolean;
+}
+
+function JourneyLayer({ journey, desktop }: Props) {
+  const map = useMap();
+
+  const selectedIdx = journey?.selectedLegIdx ?? null;
+
+  // Determine points for bounds fitting
+  const allPoints = useMemo(() => {
+    if (!journey) return [];
+    const pts: LatLng[] = [];
+    journey.legs.forEach((l, lIdx) => {
+      if (selectedIdx !== null && selectedIdx !== lIdx) return;
+      if (l.routed && l.routed.length >= 2) {
+        pts.push(...l.routed);
+      } else if (l.leg.stops) {
+        for (const s of l.leg.stops) {
+          if (s.lat && s.lon) pts.push([s.lat, s.lon]);
+        }
+      }
+    });
+    return pts;
+  }, [journey, selectedIdx]);
+
+  // Fit bounds whenever journey or selected leg changes
+  useEffect(() => {
+    if (!allPoints.length) return;
+    const opts: L.FitBoundsOptions = desktop
+      ? { paddingTopLeft: [440, 60], paddingBottomRight: [60, 40] }
+      : { paddingTopLeft: [24, 80], paddingBottomRight: [24, Math.round(window.innerHeight * 0.35)] };
+
+    const reduce = prefersReducedMotion();
+    if (allPoints.length === 1) {
+      map.setView(allPoints[0], 15, { animate: !reduce, duration: reduce ? 0 : 0.9 });
+      return;
+    }
+    map.fitBounds(L.latLngBounds(allPoints), { ...opts, maxZoom: 17, animate: !reduce, duration: reduce ? 0 : 0.9 });
+  }, [journey?.gen, selectedIdx, allPoints]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!journey) return null;
+
+  const startLeg = journey.legs[0]?.leg;
+  const startStop = startLeg?.stops?.[0];
+  const lastLeg = journey.legs[journey.legs.length - 1]?.leg;
+  const endStop = lastLeg?.stops?.[lastLeg.stops.length - 1];
+
+  return (
+    <>
+      {/* Route polylines per leg */}
+      {journey.legs.map((legItem, lIdx) => {
+        const isLegSelected = selectedIdx === null || selectedIdx === lIdx;
+        const color = legItem.lineColor || hslColor(legItem.leg.line);
+        const pts: LatLng[] =
+          legItem.routed && legItem.routed.length >= 2
+            ? legItem.routed
+            : (legItem.leg.stops?.filter((s) => s.lat && s.lon).map((s) => [s.lat!, s.lon!] as LatLng) ?? []);
+
+        if (pts.length < 2) return null;
+
+        return (
+          <div key={`journey-leg-${lIdx}`}>
+            {/* Casing line */}
+            <Polyline
+              positions={pts}
+              pathOptions={{
+                color: "#0d1013",
+                weight: isLegSelected ? 9 : 6,
+                opacity: isLegSelected ? 0.85 : 0.35,
+                lineCap: "round",
+                lineJoin: "round",
+              }}
+            />
+            {/* Colored route line */}
+            <Polyline
+              positions={pts}
+              pathOptions={{
+                color,
+                weight: isLegSelected ? 5 : 3.5,
+                opacity: isLegSelected ? 0.95 : 0.4,
+                lineCap: "round",
+                lineJoin: "round",
+              }}
+            />
+          </div>
+        );
+      })}
+
+      {/* Intermediate stops across legs */}
+      {journey.legs.map((legItem, lIdx) => {
+        const isLegSelected = selectedIdx === null || selectedIdx === lIdx;
+        const color = legItem.lineColor || hslColor(legItem.leg.line);
+        const stops = legItem.leg.stops ?? [];
+
+        return stops.slice(1, -1).map((st, sIdx) => {
+          if (!st.lat || !st.lon) return null;
+          return (
+            <CircleMarker
+              key={`journey-stop-${lIdx}-${sIdx}-${st.stopId}`}
+              center={[st.lat, st.lon]}
+              radius={isLegSelected ? 4 : 3}
+              pathOptions={{
+                color,
+                weight: 1.5,
+                fillOpacity: isLegSelected ? 0.9 : 0.4,
+                fillColor: "#ffffff",
+                opacity: isLegSelected ? 0.9 : 0.4,
+              }}
+            >
+              <Tooltip direction="top" sticky className="kb-tooltip">
+                <span className="font-semibold">{displayStopName(st.stopName)}</span> · {st.arrivalTime || st.departureTime}
+                <div className="text-[10px] text-text-faint">Linia {legItem.leg.line}</div>
+              </Tooltip>
+            </CircleMarker>
+          );
+        });
+      })}
+
+      {/* Transfer point markers */}
+      {journey.legs.slice(0, -1).map((legItem, lIdx) => {
+        const nextLeg = journey.legs[lIdx + 1]?.leg;
+        const transStop = legItem.leg.stops?.[legItem.leg.stops.length - 1];
+        if (!transStop || !transStop.lat || !transStop.lon) return null;
+
+        const waitMins = nextLeg
+          ? Math.max(1, Math.round((nextLeg.departureSecs - legItem.leg.arrivalSecs) / 60))
+          : journey.itinerary.transferWaitMins ?? 5;
+
+        const icon = makeJourneyPinIcon("transfer", `${waitMins} min`);
+
+        return (
+          <Marker
+            key={`journey-trans-${lIdx}-${transStop.stopId}`}
+            position={[transStop.lat, transStop.lon]}
+            icon={icon}
+            zIndexOffset={250}
+          >
+            <Tooltip direction="top" sticky className="kb-tooltip">
+              <div className="font-semibold text-amber-400">Przesiadka: {displayStopName(transStop.stopName)}</div>
+              <div>Czas na przesiadkę: <strong>{waitMins} min</strong></div>
+              <div className="text-[10px] text-text-mute">
+                Linia {legItem.leg.line} ({transStop.arrivalTime}) → Linia {nextLeg?.line} ({nextLeg?.departureTime})
+              </div>
+            </Tooltip>
+          </Marker>
+        );
+      })}
+
+      {/* Origin start marker */}
+      {startStop && startStop.lat && startStop.lon && (
+        <Marker
+          position={[startStop.lat, startStop.lon]}
+          icon={makeJourneyPinIcon("start")}
+          zIndexOffset={300}
+        >
+          <Tooltip direction="top" sticky className="kb-tooltip" permanent={false}>
+            <div className="font-semibold text-emerald-400">Początek trasy</div>
+            <div>{displayStopName(startStop.stopName)}</div>
+            <div className="text-[10px] text-text-mute">
+              Odjazd: <strong>{startStop.departureTime}</strong> (Linia {startLeg?.line})
+            </div>
+          </Tooltip>
+        </Marker>
+      )}
+
+      {/* Destination end marker */}
+      {endStop && endStop.lat && endStop.lon && (
+        <Marker
+          position={[endStop.lat, endStop.lon]}
+          icon={makeJourneyPinIcon("end")}
+          zIndexOffset={300}
+        >
+          <Tooltip direction="top" sticky className="kb-tooltip" permanent={false}>
+            <div className="font-semibold text-rose-400">Cel podróży</div>
+            <div>{displayStopName(endStop.stopName)}</div>
+            <div className="text-[10px] text-text-mute">
+              Przyjazd: <strong>{endStop.arrivalTime || endStop.departureTime}</strong> (Linia {lastLeg?.line})
+            </div>
+          </Tooltip>
+        </Marker>
+      )}
+    </>
+  );
+}
+
+export default memo(JourneyLayer);

@@ -1,4 +1,4 @@
-import type { LatLng, Trip } from "./types";
+import type { ConnectionItinerary, ConnectionsResponse, LatLng, Trip } from "./types";
 
 export class HttpError extends Error {
   constructor(public status: number, url: string) {
@@ -68,16 +68,6 @@ interface OsrmResponse {
   routes?: Array<{ geometry?: { coordinates?: Array<[number, number]> } }>;
 }
 
-function travelBearing(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const r = Math.PI / 180;
-  const y = Math.sin((lon2 - lon1) * r) * Math.cos(lat2 * r);
-  const x =
-    Math.cos(lat1 * r) * Math.sin(lat2 * r) -
-    Math.sin(lat1 * r) * Math.cos(lat2 * r) * Math.cos((lon2 - lon1) * r);
-  const b = Math.atan2(y, x) * (180 / Math.PI);
-  return Math.round((b + 360) % 360);
-}
-
 async function fetchChunkRoute(points: LatLng[]): Promise<LatLng[]> {
   if (points.length < 2) return points;
   const key = points.map((p) => `${p[0].toFixed(5)},${p[1].toFixed(5)}`).join(";");
@@ -89,31 +79,20 @@ async function fetchChunkRoute(points: LatLng[]): Promise<LatLng[]> {
   const p = (async (): Promise<LatLng[] | null> => {
     const coords = points.map((pt) => `${pt[1]},${pt[0]}`).join(";");
 
-    // First attempt: use travel bearings to prevent OSRM from snapping to perpendicular
-    // residential alleys, parking driveways, or dead-ends (e.g. Olimpijska in Szczyrk).
+    // Standard road routing with continue_straight=true to prevent unnatural U-turns
+    // at intermediate bus stops, without artificial bearing constraints that force
+    // routes onto parallel residential alleys and detour loops at turns (e.g. line 115).
     try {
-      const bearings = points
-        .map((_, idx) => {
-          let b: number;
-          if (idx === 0) b = travelBearing(points[0][0], points[0][1], points[1][0], points[1][1]);
-          else if (idx === points.length - 1)
-            b = travelBearing(points[idx - 1][0], points[idx - 1][1], points[idx][0], points[idx][1]);
-          else
-            b = travelBearing(points[idx - 1][0], points[idx - 1][1], points[idx + 1][0], points[idx + 1][1]);
-          return `${b},45`;
-        })
-        .join(";");
-
       const d = await fetchJSON<OsrmResponse>(
-        `${OSRM}/${coords}?overview=full&geometries=geojson&bearings=${bearings}`,
+        `${OSRM}/${coords}?overview=full&geometries=geojson&continue_straight=true`,
       );
       const line = d.routes?.[0]?.geometry?.coordinates;
       if (line && line.length) return line.map((c): LatLng => [c[1], c[0]]);
     } catch {
-      // bearings might restrict too much on sharp hairpin turns; fall back below
+      // continue_straight fallback
     }
 
-    // Fallback: standard OSRM call without bearing restrictions
+    // Fallback: standard OSRM call
     try {
       const d = await fetchJSON<OsrmResponse>(`${OSRM}/${coords}?overview=full&geometries=geojson`);
       const line = d.routes?.[0]?.geometry?.coordinates;
@@ -169,3 +148,48 @@ export async function fetchRoute(points: LatLng[]): Promise<LatLng[] | null> {
 
   return merged.length >= 2 ? merged : points;
 }
+
+export interface GetConnectionsOptions {
+  time?: string;
+  date?: string;
+  dayLabel?: string;
+  directOnly?: boolean;
+  minTransfer?: number;
+  sortBy?: "departure" | "duration" | "arrival";
+  limit?: number;
+  signal?: AbortSignal;
+}
+
+export async function getConnections(
+  from: string,
+  to: string,
+  optionsOrTime?: GetConnectionsOptions | string,
+  maybeSignal?: AbortSignal,
+): Promise<ConnectionItinerary[]> {
+  const p = new URLSearchParams({ from, to });
+  let signal = maybeSignal;
+
+  if (typeof optionsOrTime === "string") {
+    if (optionsOrTime) p.set("time", optionsOrTime);
+  } else if (optionsOrTime) {
+    if (optionsOrTime.time) p.set("time", optionsOrTime.time);
+    if (optionsOrTime.date) p.set("date", optionsOrTime.date);
+    if (optionsOrTime.dayLabel) p.set("dayLabel", optionsOrTime.dayLabel);
+    if (optionsOrTime.directOnly) p.set("direct", "true");
+    if (optionsOrTime.minTransfer != null) p.set("minTransfer", String(optionsOrTime.minTransfer));
+    if (optionsOrTime.sortBy) p.set("sortBy", optionsOrTime.sortBy);
+    if (optionsOrTime.limit != null) p.set("limit", String(optionsOrTime.limit));
+    if (optionsOrTime.signal) signal = optionsOrTime.signal;
+  }
+
+  try {
+    const res = await fetchJSON<ConnectionsResponse>(`/api/connections?${p.toString()}`, {
+      signal,
+      cache: "no-store",
+    });
+    return res?.connections ?? [];
+  } catch {
+    return [];
+  }
+}
+

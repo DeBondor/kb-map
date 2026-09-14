@@ -17,10 +17,11 @@ import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "
 import { useIsDesktop, useLines, useVehicles, type GeoPos, type GeoStatus } from "@/components/hooks";
 import { EmptyState, LineBadge, StarIcon } from "@/components/ui";
 import { useFavorites } from "@/lib/client/favorites";
+import { getConnections } from "@/lib/client/api";
 import { delayTxt, displayStopName, normalizeText, wozPlural } from "@/lib/client/format";
 import { formatDistance, haversineMeters, nearestStops } from "@/lib/client/geo";
 import type { BaseLayerId } from "@/components/TopBar";
-import type { LineInfo, Stop, Vehicle } from "@/lib/client/types";
+import type { ConnectionItinerary, LineInfo, Stop, Vehicle } from "@/lib/client/types";
 
 export interface CommandPaletteProps {
   open: boolean;
@@ -44,6 +45,8 @@ export interface CommandPaletteProps {
   lineFilter: ReadonlySet<string> | null;
   onToggleLine: (line: string) => void;
   onClearLineFilter: () => void;
+  initialRouteFrom?: Stop | null;
+  onOpenConnections?: () => void;
 }
 
 /* ---------- result model ---------- */
@@ -63,6 +66,7 @@ type Item =
   | { kind: "action"; a: ActionDef }
   | { kind: "line"; l: LineInfo; live: number; active: boolean }
   | { kind: "veh"; v: Vehicle }
+  | { kind: "conn"; c: ConnectionItinerary }
   | { kind: "stop"; s: Stop; fav: boolean; dist: number | null };
 
 interface Section {
@@ -74,6 +78,7 @@ const itemKey = (it: Item): string =>
   it.kind === "action" ? `a-${it.a.id}`
   : it.kind === "line" ? `l-${it.l.id}`
   : it.kind === "veh" ? `v-${it.v.id}`
+  : it.kind === "conn" ? `c-${it.c.departureTime}-${it.c.arrivalTime}-${it.c.legs.map((l) => l.line).join("-")}`
   : `s-${it.s.id}`;
 
 const CAP = { lines: 4, vehs: 5, actions: 4, stops: 7 } as const;
@@ -150,6 +155,24 @@ function ClearGlyph() {
   );
 }
 
+function RouteGlyph() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="6" cy="19" r="3" />
+      <path d="M9 19h8.5a4.5 4.5 0 0 0 0-9H7a4 4 0 0 1 0-8h11" />
+      <polyline points="15 5 18 2 21 5" />
+    </svg>
+  );
+}
+
+function SwapGlyph() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M7 16V4m0 0L3 8m4-4l4 4m6 4v12m0 0l4-4m-4 4l-4-4" />
+    </svg>
+  );
+}
+
 function FilterOffGlyph() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -194,6 +217,8 @@ function PaletteDialog({
   lineFilter,
   onToggleLine,
   onClearLineFilter,
+  initialRouteFrom,
+  onOpenConnections,
 }: CommandPaletteProps) {
   const { data: vehData } = useVehicles();
   const { data: linesData } = useLines();
@@ -205,7 +230,12 @@ function PaletteDialog({
 
   const [query, setQuery] = useState("");
   const [hi, setHi] = useState(0);
-  const [view, setView] = useState<"root" | "nearby">("root");
+  const [view, setView] = useState<"root" | "nearby" | "route">(initialRouteFrom ? "route" : "root");
+  const [routeStep, setRouteStep] = useState<"from" | "to" | "results">(initialRouteFrom ? "to" : "from");
+  const [routeFrom, setRouteFrom] = useState<Stop | null>(initialRouteFrom ?? null);
+  const [routeTo, setRouteTo] = useState<Stop | null>(null);
+  const [connections, setConnections] = useState<ConnectionItinerary[] | null>(null);
+  const [connLoading, setConnLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const listId = useId();
 
@@ -226,6 +256,19 @@ function PaletteDialog({
       if (query) {
         setQuery("");
         setHi(0);
+      } else if (view === "route") {
+        if (routeStep === "results") {
+          setRouteStep("to");
+          setConnections(null);
+          setHi(0);
+        } else if (routeStep === "to") {
+          setRouteStep("from");
+          setRouteFrom(null);
+          setHi(0);
+        } else {
+          setView("root");
+          setHi(0);
+        }
       } else if (view === "nearby") {
         setView("root");
         setHi(0);
@@ -235,7 +278,7 @@ function PaletteDialog({
     };
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
-  }, [query, view, onClose]);
+  }, [query, view, routeStep, onClose]);
 
   /* normalize stop names once per stops change, not on every 5 s poll */
   const stopIndex = useMemo(() => stops.map((s) => ({ s, n: normalizeText(s.name) })), [stops]);
@@ -255,6 +298,27 @@ function PaletteDialog({
 
   const actions = useMemo<ActionDef[]>(() => {
     const list: ActionDef[] = [
+      {
+        id: "route",
+        label: "Wyznacz trasę",
+        keywords: "trasa polaczenie jak dojechac dojazd planuj wyszukaj polaczenia",
+        icon: <RouteGlyph />,
+        run: () => {
+          if (onOpenConnections) {
+            onClose();
+            onOpenConnections();
+          } else {
+            setView("route");
+            setRouteStep("from");
+            setRouteFrom(null);
+            setRouteTo(null);
+            setConnections(null);
+            setQuery("");
+            setHi(0);
+          }
+        },
+        keepOpen: !onOpenConnections,
+      },
       {
         id: "locate",
         label: "Moja lokalizacja",
@@ -307,7 +371,7 @@ function PaletteDialog({
       });
     }
     return list;
-  }, [geoPos, onLocate, onEnsureGeo, stopsVisible, onToggleStops, baseLayer, onBaseLayer, onClearView, lineFilter, onClearLineFilter]);
+  }, [geoPos, onLocate, onEnsureGeo, stopsVisible, onToggleStops, baseLayer, onBaseLayer, onClearView, lineFilter, onClearLineFilter, onClose, onOpenConnections]);
 
   /* ---------- sections ---------- */
 
@@ -315,6 +379,57 @@ function PaletteDialog({
     const q = normalizeText(query.trim());
     const stopDist = (s: Stop) =>
       geoPos ? haversineMeters(geoPos.lat, geoPos.lon, s.lat, s.lon) : null;
+
+    if (view === "route") {
+      if (routeStep === "results") {
+        if (connLoading || !connections || connections.length === 0) return [];
+        return [
+          {
+            title: `Znalezione połączenia (${connections.length})`,
+            items: connections.map((c): Item => ({ kind: "conn", c })),
+          },
+        ];
+      }
+
+      if (!q) {
+        const out: Section[] = [];
+        if (routeStep === "from" && geoPos) {
+          out.push({
+            title: "Moja lokalizacja (najbliższy przystanek)",
+            items: nearestStops(stops, geoPos, 3).map(
+              ({ s, dist }): Item => ({ kind: "stop", s, fav: favSet.has(s.designator), dist }),
+            ),
+          });
+        }
+        const favStops = favs
+          .map((d) => byDesig.get(d))
+          .filter((s): s is Stop => !!s)
+          .map((s): Item => ({ kind: "stop", s, fav: true, dist: stopDist(s) }));
+        if (favStops.length) out.push({ title: "Ulubione", items: favStops.slice(0, 6) });
+        return out;
+      }
+
+      const stopHits: Array<{ item: Item; rank: number; dist: number }> = [];
+      for (const { s, n } of stopIndex) {
+        let rank = -1;
+        if (n === q) rank = 0;
+        else if (n.startsWith(q)) rank = 1;
+        else if (n.includes(q)) rank = 3;
+        if (rank < 0) continue;
+        stopHits.push({
+          item: { kind: "stop", s, fav: favSet.has(s.designator), dist: stopDist(s) },
+          rank,
+          dist: stopDist(s) ?? Infinity,
+        });
+      }
+      stopHits.sort((a, b) => a.rank - b.rank || a.dist - b.dist);
+      return [
+        {
+          title: routeStep === "from" ? "Wybierz przystanek początkowy" : "Wybierz przystanek docelowy",
+          items: stopHits.slice(0, 15).map((h) => h.item),
+        },
+      ];
+    }
 
     if (view === "nearby" && !q) {
       if (!geoPos) return [];
@@ -413,22 +528,51 @@ function PaletteDialog({
       });
     }
 
-    const finish = (hits: Scored[], cap: number): { items: Item[]; best: number } => {
+    const finish = (hits: Scored[], cap: number, dedupeByName = false): { items: Item[]; best: number } => {
       hits.sort(
         (a, b) => a.rank - b.rank || a.dist - b.dist || a.label.localeCompare(b.label, "pl"),
       );
-      return { items: hits.slice(0, cap).map((h) => h.item), best: hits[0]?.rank ?? Infinity };
+      if (!dedupeByName) {
+        return { items: hits.slice(0, cap).map((h) => h.item), best: hits[0]?.rank ?? Infinity };
+      }
+      const seen = new Set<string>();
+      const deduped: Item[] = [];
+      for (const h of hits) {
+        const key = normalizeText(h.label);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        deduped.push(h.item);
+        if (deduped.length >= cap) break;
+      }
+      return { items: deduped, best: hits[0]?.rank ?? Infinity };
     };
 
     const groups = [
       { title: "Linie", ...finish(lineHits, CAP.lines) },
       { title: "Kursy na żywo", ...finish(vehHits, CAP.vehs) },
       { title: "Akcje", ...finish(actionHits, CAP.actions) },
-      { title: "Przystanki", ...finish(stopHits, CAP.stops) },
+      { title: "Przystanki", ...finish(stopHits, CAP.stops, true) },
     ].filter((g) => g.items.length > 0);
     groups.sort((a, b) => a.best - b.best);
     return groups.map(({ title, items }) => ({ title, items }));
-  }, [query, view, stops, stopIndex, byDesig, favs, favSet, geoPos, actions, lines, vehicles, liveByLine, lineFilter]);
+  }, [
+    query,
+    view,
+    routeStep,
+    connections,
+    connLoading,
+    stops,
+    stopIndex,
+    byDesig,
+    favs,
+    favSet,
+    geoPos,
+    actions,
+    lines,
+    vehicles,
+    liveByLine,
+    lineFilter,
+  ]);
 
   const rows = useMemo(() => sections.flatMap((sec) => sec.items), [sections]);
 
@@ -445,19 +589,45 @@ function PaletteDialog({
   const pick = useCallback(
     (it: Item) => {
       if (it.kind === "stop") {
+        if (view === "route") {
+          if (routeStep === "from") {
+            setRouteFrom(it.s);
+            setRouteStep("to");
+            setQuery("");
+            setHi(0);
+            return;
+          }
+          if (routeStep === "to") {
+            setRouteTo(it.s);
+            setRouteStep("results");
+            setQuery("");
+            setHi(0);
+            if (routeFrom) {
+              setConnLoading(true);
+              void getConnections(routeFrom.id || routeFrom.name, it.s.id || it.s.name).then((conns) => {
+                setConnections(conns);
+                setConnLoading(false);
+              });
+            }
+            return;
+          }
+        }
         onPickStop(it.s);
+        onClose();
+      } else if (it.kind === "conn") {
+        if (routeFrom) onPickStop(routeFrom);
         onClose();
       } else if (it.kind === "veh") {
         onPickVehicle(it.v);
         onClose();
       } else if (it.kind === "line") {
         onToggleLine(it.l.name); // keep open — filters are multi-select
-      } else {
+      } else if (it.kind === "action") {
         it.a.run();
         if (!it.a.keepOpen) onClose();
       }
     },
-    [onPickStop, onPickVehicle, onToggleLine, onClose],
+    [view, routeStep, routeFrom, onPickStop, onPickVehicle, onToggleLine, onClose],
   );
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -494,6 +664,33 @@ function PaletteDialog({
             pick(it);
           }}
         >
+          {it.kind === "conn" && (
+            <div className="flex w-full flex-col gap-1 py-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[14px] font-bold tabular-nums text-text">
+                  {it.c.departureTime} → {it.c.arrivalTime}
+                </span>
+                <span className="text-[11px] font-semibold tabular-nums text-primary">
+                  {it.c.totalDurationMins} min
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-[12px] text-text-mute">
+                <div className="flex items-center gap-1">
+                  {it.c.legs.map((leg, idx) => (
+                    <span key={idx} className="inline-flex items-center gap-1">
+                      {idx > 0 && <span className="text-text-faint">→</span>}
+                      <LineBadge line={leg.line} />
+                    </span>
+                  ))}
+                </div>
+                <span className="truncate text-[11px] text-text-faint">
+                  {it.c.type === "direct"
+                    ? "Bezpośredni"
+                    : `Przesiadka: ${displayStopName(it.c.transferStopName || "")}${it.c.transferWaitMins ? ` (${it.c.transferWaitMins} min)` : ""}`}
+                </span>
+              </div>
+            </div>
+          )}
           {it.kind === "stop" && (
             <>
               {it.fav ? (
@@ -565,7 +762,13 @@ function PaletteDialog({
         aria-hidden
       />
       <div className="kb-scroll h-full overflow-y-auto pb-2">
-      {view === "nearby" && !geoPos ? (
+      {view === "route" && routeStep === "results" && connLoading ? (
+        <p className="px-5 py-8 text-center text-[13px] text-text-mute" role="status">
+          Szukanie połączeń…
+        </p>
+      ) : view === "route" && routeStep === "results" && (!connections || connections.length === 0) ? (
+        <EmptyState text="Brak bezpośrednich ani 1-przesiadkowych połączeń w rozkładzie." />
+      ) : view === "nearby" && !geoPos ? (
         <p className="px-5 py-8 text-center text-[13px] text-text-mute" role="status">
           {geoStatus === "denied"
             ? "Brak zgody na lokalizację — włącz ją w ustawieniach przeglądarki."
@@ -605,7 +808,17 @@ function PaletteDialog({
         aria-activedescendant={rows.length > 0 ? optionId(active) : undefined}
         aria-autocomplete="list"
         aria-label="Szukaj przystanku, linii lub akcji"
-        placeholder={view === "nearby" ? "Najbliższe przystanki" : "Szukaj przystanku, linii, akcji…"}
+        placeholder={
+          view === "nearby"
+            ? "Najbliższe przystanki"
+            : view === "route"
+              ? routeStep === "from"
+                ? "Skąd: wpisz przystanek początkowy…"
+                : routeStep === "to"
+                  ? "Dokąd: wpisz przystanek docelowy…"
+                  : "Szukaj…"
+              : "Szukaj przystanku, linii, akcji…"
+        }
         autoComplete="off"
         autoFocus
         spellCheck={false}
@@ -613,7 +826,7 @@ function PaletteDialog({
         value={query}
         onChange={(e) => {
           setQuery(e.target.value);
-          if (view !== "root") setView("root");
+          if (view === "nearby") setView("root");
           setHi(0);
         }}
         onKeyDown={onKeyDown}
@@ -631,6 +844,58 @@ function PaletteDialog({
     </div>
   );
 
+  const routeBanner = view === "route" && (
+    <div className="flex items-center justify-between border-b border-hairline bg-surface-2 px-4 py-2 text-[12px]">
+      <div className="flex min-w-0 flex-1 items-center gap-1.5 truncate">
+        <span className="shrink-0 font-semibold text-text-mute">Trasa:</span>
+        <span className="truncate font-medium text-text">
+          {routeFrom ? displayStopName(routeFrom.name) : "1. Start"}
+        </span>
+        <span className="text-text-faint">→</span>
+        <span className="truncate font-medium text-text">
+          {routeTo ? displayStopName(routeTo.name) : "2. Cel"}
+        </span>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {routeFrom && routeTo && (
+          <button
+            type="button"
+            onClick={() => {
+              const f = routeFrom;
+              const t = routeTo;
+              setRouteFrom(t);
+              setRouteTo(f);
+              setRouteStep("results");
+              setConnLoading(true);
+              void getConnections(t.id || t.name, f.id || f.name).then((conns) => {
+                setConnections(conns);
+                setConnLoading(false);
+              });
+            }}
+            className="rounded p-1 text-text-mute hover:bg-white/10 hover:text-text"
+            title="Zamień kierunki"
+          >
+            <SwapGlyph />
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => {
+            setView("root");
+            setRouteStep("from");
+            setRouteFrom(null);
+            setRouteTo(null);
+            setConnections(null);
+            setQuery("");
+          }}
+          className="text-[11px] font-semibold text-text-mute hover:text-text"
+        >
+          Zakończ
+        </button>
+      </div>
+    </div>
+  );
+
   if (!desktop) {
     return (
       <div
@@ -640,6 +905,7 @@ function PaletteDialog({
         className="fixed inset-0 z-[1200] flex h-dvh flex-col bg-bg pt-[env(safe-area-inset-top,0px)] animate-palette-up"
       >
         {inputRow}
+        {routeBanner}
         {listBody}
       </div>
     );
@@ -659,6 +925,7 @@ function PaletteDialog({
         className="surface absolute left-1/2 top-[16vh] flex max-h-[min(65vh,520px)] w-[min(600px,calc(100vw-32px))] -translate-x-1/2 flex-col overflow-hidden rounded-2xl animate-palette"
       >
         {inputRow}
+        {routeBanner}
         {listBody}
         <div className="flex shrink-0 items-center gap-3 border-t border-hairline px-4 py-2 text-[11px] text-text-faint">
           <span><kbd className="rounded bg-white/8 px-1">↑↓</kbd> wybierz</span>

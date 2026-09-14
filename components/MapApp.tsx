@@ -6,11 +6,14 @@ import { AttributionControl, Circle, MapContainer, Marker, TileLayer, ZoomContro
 import L from "leaflet";
 import { fetchJSON, fetchRoute, getTrip } from "@/lib/client/api";
 import { adjustStopRoutePoint, injectDetourPoints } from "@/lib/client/detours";
-import { tripTimeMatchesStop } from "@/lib/client/format";
+import { tripTimeMatchesStop, hslColor } from "@/lib/client/format";
 import { makeStopPingIcon, makeUserLocationIcon } from "@/lib/client/leafletIcons";
 import { panMotion } from "@/lib/client/motion";
 import { buildSearch, parseUrlState, type UrlState } from "@/lib/client/urlState";
 import type {
+  ConnectionItinerary,
+  JourneyLegResolved,
+  JourneyView as JourneyViewState,
   LatLng,
   Stop,
   Trip,
@@ -22,15 +25,20 @@ import type {
 import { useGeolocation, useIsDesktop, useStops, useVehicles } from "@/components/hooks";
 import AnnouncementsSheet from "@/components/AnnouncementsSheet";
 import CommandPalette from "@/components/CommandPalette";
+import ConnectionsModal from "@/components/ConnectionsModal";
 import Toast from "@/components/Toast";
 import LineFilterChip from "@/components/LineFilterChip";
 import LocateButton from "@/components/LocateButton";
+import RouteButton from "@/components/RouteButton";
+import SearchButton from "@/components/SearchButton";
 import TopBar, { BASE_LAYERS, RASTER_FALLBACK, type BaseLayerId } from "@/components/TopBar";
 import StopView from "@/components/StopView";
 import TripPanel from "@/components/TripView";
+import JourneyView from "@/components/JourneyView";
 import VehicleLayer from "@/components/VehicleLayer";
 import StopsLayer from "@/components/StopsLayer";
 import TripLayer from "@/components/TripLayer";
+import JourneyLayer from "@/components/JourneyLayer";
 import VectorBaseLayer, { type BasemapStatus } from "@/components/VectorBaseLayer";
 
 const NOT_STARTED = "Pojazd jeszcze nie wyruszył";
@@ -52,6 +60,7 @@ function loadingTrip(
   stop: Stop | null,
   note: string | null,
   execId: string | null,
+  tripId: string | number | null = null,
 ): TripView {
   return {
     gen,
@@ -67,6 +76,7 @@ function loadingTrip(
     stop,
     routed: null,
     execId,
+    tripId,
   };
 }
 
@@ -74,13 +84,15 @@ export default function MapApp() {
   const { data: vehData, error: vehError } = useVehicles();
   const { data: stopsData } = useStops();
   const stops = useMemo(() => stopsData?.stops ?? [], [stopsData]);
-  const vehicles = vehData?.vehicles ?? [];
+  const vehicles = useMemo(() => vehData?.vehicles ?? [], [vehData?.vehicles]);
   const desktop = useIsDesktop();
 
   const mapRef = useRef<L.Map | null>(null);
   const [selectedStop, setSelectedStop] = useState<Stop | null>(null);
   const [stopsVisible, setStopsVisible] = useState(true);
   const [trip, setTrip] = useState<TripView | null>(null);
+  const [journey, setJourney] = useState<JourneyViewState | null>(null);
+  const journeyGenRef = useRef(0);
   const [vehMeta, setVehMeta] = useState<Vehicle | null>(null);
   const [baseLayer, setBaseLayerState] = useState<BaseLayerId>(() => {
     // safe to touch window here — MapApp mounts behind the ssr:false boundary
@@ -99,6 +111,9 @@ export default function MapApp() {
     attempt: 0,
   });
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [routeFromStop, setRouteFromStop] = useState<Stop | null>(null);
+  const [connModalOpen, setConnModalOpen] = useState(false);
+  const [connInitialFrom, setConnInitialFrom] = useState<Stop | null>(null);
   const [annOpen, setAnnOpen] = useState(false);
   /* deep link parsed exactly once, before any state settles (ssr:false — window
      is safe in the lazy initializer) */
@@ -190,6 +205,7 @@ export default function MapApp() {
       isLive: boolean,
       note: string | null,
       execId: string | null,
+      tripId: string | number | null = null,
     ) => {
       if (gen !== genRef.current) return;
       const { byId, byDesig } = stopsMapsRef.current;
@@ -225,6 +241,7 @@ export default function MapApp() {
         stop,
         routed: null,
         execId,
+        tripId,
       });
       if (!needRoute) return;
       const road = await fetchRoute(routePts);
@@ -254,6 +271,7 @@ export default function MapApp() {
       t.isLive,
       t.note,
       t.execId,
+      t.tripId,
     );
   }, [stopsMaps, trip, buildTrip]);
 
@@ -262,7 +280,7 @@ export default function MapApp() {
       if (!tripId) return;
       lastReqRef.current = { kind: "static", tripId, stop };
       const gen = ++genRef.current;
-      setTrip(loadingTrip(gen, false, stop, note, null));
+      setTrip(loadingTrip(gen, false, stop, note, null, tripId));
       let tr: Trip | null = null;
       try {
         tr = await getTrip(tripId);
@@ -274,7 +292,7 @@ export default function MapApp() {
         setTrip((prev) => (prev && prev.gen === gen ? { ...prev, status: "error" } : prev));
         return;
       }
-      await buildTrip(gen, tr, null, null, stop, false, note, null);
+      await buildTrip(gen, tr, null, null, stop, false, note, null, tripId);
     },
     [buildTrip],
   );
@@ -292,7 +310,7 @@ export default function MapApp() {
       }
       lastReqRef.current = { kind: "live", execId, tripId, stop };
       const gen = ++genRef.current;
-      setTrip(loadingTrip(gen, true, stop, null, execId));
+      setTrip(loadingTrip(gen, true, stop, null, execId, tripId));
       tripExecAbortRef.current?.abort();
       const ac = new AbortController();
       tripExecAbortRef.current = ac;
@@ -338,6 +356,7 @@ export default function MapApp() {
           hasLivePosition,
           null,
           execId,
+          tripId,
         );
       } catch {
         if (gen !== genRef.current) return;
@@ -354,18 +373,38 @@ export default function MapApp() {
     else void openTripStatic(req.tripId, req.stop);
   }, [openTripLive, openTripStatic]);
 
+  const closeJourney = useCallback(() => {
+    journeyGenRef.current++;
+    setJourney(null);
+  }, []);
+
+  const handleSelectJourneyLeg = useCallback((legIdx: number | null) => {
+    setJourney((prev) => (prev ? { ...prev, selectedLegIdx: legIdx } : null));
+  }, []);
+
+  const handleBackToConnections = useCallback(() => {
+    closeJourney();
+    setConnModalOpen(true);
+  }, [closeJourney]);
+
+  const handleFocusJourneyStop = useCallback((lat: number, lon: number) => {
+    const m = mapRef.current;
+    if (m) m.flyTo([lat, lon], Math.max(m.getZoom(), 16), panMotion(0.9));
+  }, []);
+
   const handleSelectStop = useCallback(
     (s: Stop, opts?: { fly?: boolean }) => {
-      /* picking a stop while a trip route is drawn closes the trip so the
-         stop sheet actually shows (no-op when no trip is open) */
+      /* picking a stop while a trip/journey is drawn closes it so the
+         stop sheet actually shows */
       closeTrip();
+      closeJourney();
       setSelectedStop(s);
       if (opts?.fly && mapRef.current) {
         const m = mapRef.current;
         m.flyTo([s.lat, s.lon], Math.max(m.getZoom(), 16), panMotion(1.1));
       }
     },
-    [closeTrip],
+    [closeTrip, closeJourney],
   );
 
   /* stable identities so memo(TopBar) survives the 5 s vehicle poll re-render */
@@ -374,7 +413,90 @@ export default function MapApp() {
 
   /* command palette */
   const openPalette = useCallback(() => setPaletteOpen(true), []);
-  const closePalette = useCallback(() => setPaletteOpen(false), []);
+  const closePalette = useCallback(() => {
+    setPaletteOpen(false);
+    setRouteFromStop(null);
+  }, []);
+
+  /* connections modal ("Wyszukaj połączenie") */
+  const openConnModal = useCallback(() => setConnModalOpen(true), []);
+  const closeConnModal = useCallback(() => {
+    setConnModalOpen(false);
+    setConnInitialFrom(null);
+  }, []);
+
+  const handlePlanRoute = useCallback((s: Stop) => {
+    setConnInitialFrom(s);
+    setConnModalOpen(true);
+  }, []);
+
+  const handleSelectConnection = useCallback(
+    async (conn: ConnectionItinerary, selectedLegIdx: number | null = null) => {
+      closeTrip();
+      setSelectedStop(null);
+
+      const gen = ++journeyGenRef.current;
+      const { byId, byDesig } = stopsMapsRef.current;
+
+      const legsResolved: JourneyLegResolved[] = conn.legs.map((leg) => {
+        const color = hslColor(leg.line);
+        if (leg.stops) {
+          leg.stops.forEach((st) => {
+            if (!st.lat || !st.lon) {
+              const s = byId.get(st.stopId) ?? byDesig.get(st.stopId);
+              if (s) {
+                st.lat = s.lat;
+                st.lon = s.lon;
+              }
+            }
+          });
+        }
+        return {
+          leg,
+          routed: null,
+          lineColor: color,
+        };
+      });
+
+      const firstLeg = conn.legs[0];
+      const lastLeg = conn.legs[conn.legs.length - 1];
+      const fromStop = firstLeg ? byId.get(firstLeg.fromStopId) ?? byDesig.get(firstLeg.fromStopId) ?? null : null;
+      const toStop = lastLeg ? byId.get(lastLeg.toStopId) ?? byDesig.get(lastLeg.toStopId) ?? null : null;
+
+      const initialJourney: JourneyViewState = {
+        gen,
+        itinerary: conn,
+        fromStop,
+        toStop,
+        legs: legsResolved,
+        selectedLegIdx,
+        status: "routing",
+      };
+      setJourney(initialJourney);
+
+      // Asynchronously fetch road geometries via OSRM for all legs in parallel
+      const routedLegs = await Promise.all(
+        legsResolved.map(async (lr) => {
+          const stops = lr.leg.stops ?? [];
+          const pts: LatLng[] = stops
+            .filter((s) => s.lat && s.lon)
+            .map((s) => [s.lat!, s.lon!] as LatLng);
+          if (pts.length < 2) return lr;
+          const road = await fetchRoute(pts);
+          return {
+            ...lr,
+            routed: road && road.length >= 2 ? road : pts,
+          };
+        }),
+      );
+
+      if (gen !== journeyGenRef.current) return;
+      setJourney((prev) =>
+        prev && prev.gen === gen ? { ...prev, legs: routedLegs, status: "ready" } : prev,
+      );
+    },
+    [closeTrip],
+  );
 
   /* announcements sheet ("Utrudnienia") */
   const openAnnouncements = useCallback(() => setAnnOpen(true), []);
@@ -512,6 +634,7 @@ export default function MapApp() {
         st.fromPop = true;
         st.pushed = Math.max(0, st.pushed - 1);
         closeTrip();
+        closeJourney();
         if (!dl.stop) setSelectedStop(null);
         return;
       }
@@ -519,6 +642,7 @@ export default function MapApp() {
         st.fromPop = true;
         st.pushed = Math.max(0, st.pushed - 1);
         setSelectedStop(null);
+        closeJourney();
         return;
       }
       const want = buildSearch(cur);
@@ -528,20 +652,22 @@ export default function MapApp() {
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, [closeTrip]);
+  }, [closeTrip, closeJourney]);
 
   /* "Wyczyść widok": close every sheet and drop the line filter */
   const handleClearView = useCallback(() => {
     closeTrip();
+    closeJourney();
     setSelectedStop(null);
     setLineFilter(null);
-  }, [closeTrip]);
+  }, [closeTrip, closeJourney]);
 
-  /* stable identities for the memo()-ized sheets (TripPanel / StopView) */
+  /* stable identities for the memo()-ized sheets (TripPanel / StopView / JourneyView) */
   const handleCloseAll = useCallback(() => {
     closeTrip();
+    closeJourney();
     setSelectedStop(null);
-  }, [closeTrip]);
+  }, [closeTrip, closeJourney]);
 
   const handleCloseStop = useCallback(() => setSelectedStop(null), []);
 
@@ -637,12 +763,23 @@ export default function MapApp() {
   /* trip opened from a stop → back returns to that stop's sheet */
   const tripFromStop = !!trip && trip.stop != null && selectedStop != null;
 
-  /* live fix for the open trip: the 5 s /api/vehicles poll keeps the drawn
+  /* live fix for the open trip: the live poll keeps the drawn
      vehicle's position, heading, delay and current stop fresh (matched by
-     exec id) — so it moves on the map and advances the timeline without
-     re-opening the route. null once the vehicle drops off the live feed. */
-  const liveTripVeh =
-    trip?.isLive && trip.execId ? vehicles.find((v) => v.id === trip.execId) ?? null : null;
+     exec id or trip id) — so it moves on the map and advances the timeline without
+     re-opening the route. If the course was opened statically before the bus departed,
+     it automatically starts tracking live as soon as the vehicle appears online. */
+  const liveTripVeh = useMemo(() => {
+    if (!trip) return null;
+    if (trip.execId) {
+      const byExec = vehicles.find((v) => v.id === trip.execId);
+      if (byExec) return byExec;
+    }
+    if (trip.tripId) {
+      const byTrip = vehicles.find((v) => v.trip_id && String(v.trip_id) === String(trip.tripId));
+      if (byTrip) return byTrip;
+    }
+    return null;
+  }, [trip, vehicles]);
 
   return (
     <div className="relative h-dvh w-full overflow-hidden bg-bg">
@@ -684,12 +821,12 @@ export default function MapApp() {
           />
         )}
         <TripLayer trip={trip} desktop={desktop} vehMeta={vehMeta} liveVehicle={liveTripVeh} />
-        {/* while a route is drawn, hide the live fleet: the selected vehicle is
-            already drawn by TripLayer (no duplicate) and the rest won't obscure it */}
+        <JourneyLayer journey={journey} desktop={desktop} />
+        {/* while a route or journey is drawn, hide the live fleet */}
         <VehicleLayer
           vehicles={vehicles}
           onVehicleClick={handleVehicleClick}
-          hidden={trip != null}
+          hidden={trip != null || journey != null}
           lineFilter={lineFilter}
         />
         {geo.pos && (
@@ -723,8 +860,6 @@ export default function MapApp() {
 
       <TopBar
         count={vehData?.count ?? null}
-        lastScan={vehData?.last_scan ?? null}
-        scanCount={vehData?.scan_count ?? null}
         offline={!!vehError}
         stopsVisible={stopsVisible}
         onToggleStops={toggleStops}
@@ -762,9 +897,23 @@ export default function MapApp() {
         lineFilter={lineFilter}
         onToggleLine={toggleLineFilter}
         onClearLineFilter={clearLineFilter}
+        initialRouteFrom={routeFromStop}
+        onOpenConnections={openConnModal}
       />
 
       <LocateButton status={geo.status} onLocate={handleLocate} />
+      <SearchButton onSearch={openPalette} />
+      <RouteButton onClick={openConnModal} />
+
+      <ConnectionsModal
+        open={connModalOpen}
+        onClose={closeConnModal}
+        stops={stops}
+        geoPos={geo.pos}
+        initialFrom={connInitialFrom}
+        onSelectStop={pickStopFly}
+        onSelectConnection={handleSelectConnection}
+      />
 
       {toast && <Toast text={toast} onClose={closeToast} />}
 
@@ -784,15 +933,27 @@ export default function MapApp() {
           onFocusStop={handleFocusStop}
           onRetry={retryTrip}
         />
+      ) : journey ? (
+        <JourneyView
+          key={`journey-${journey.gen}`}
+          journey={journey}
+          desktop={desktop}
+          onClose={closeJourney}
+          onBackToSearch={handleBackToConnections}
+          onSelectLeg={handleSelectJourneyLeg}
+          onFocusStop={handleFocusJourneyStop}
+        />
       ) : (
         selectedStop && (
           <StopView
             key={selectedStop.designator}
             stop={selectedStop}
             desktop={desktop}
+            vehicles={vehicles}
             onClose={handleCloseStop}
             onShowLive={handleShowLive}
             onShowStatic={handleShowStatic}
+            onPlanRoute={handlePlanRoute}
           />
         )
       )}

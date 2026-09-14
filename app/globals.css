@@ -318,11 +318,110 @@ html, body { height: 100%; }
   filter: invert(96%) hue-rotate(180deg) brightness(85%) contrast(105%) saturate(80%);
 }
 
+/* journey route markers (connection planner) */
+.journey-pin-marker {
+  background: none !important;
+  border: 0 !important;
+}
+
+.journey-pin-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  pointer-events: auto;
+}
+
+/* circular origin / destination transit nodes */
+.journey-node-pin {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--color-surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 3px 10px rgba(0, 0, 0, 0.5);
+  transition: transform 0.15s var(--ease-spring);
+  box-sizing: border-box;
+}
+
+.journey-node-start {
+  border: 2.5px solid #10b981;
+}
+.journey-node-start .journey-node-inner {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #10b981;
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.7);
+}
+
+.journey-node-end {
+  border: 2.5px solid var(--color-primary);
+}
+.journey-node-end .journey-node-inner {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--color-primary);
+  box-shadow: 0 0 6px rgba(238, 117, 131, 0.7);
+}
+
+.journey-node-pin:hover {
+  transform: translate(-50%, -50%) scale(1.15);
+}
+
+/* transfer point pill matching the zbiorkom veh-pill aesthetic */
+.journey-trans-pill {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px 0 6px;
+  border-radius: 999px;
+  background: var(--color-surface-2);
+  border: 1.5px solid var(--color-late);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 3px 10px rgba(0, 0, 0, 0.5);
+  white-space: nowrap;
+  transition: transform 0.15s var(--ease-spring);
+  box-sizing: border-box;
+}
+
+.journey-trans-pill:hover {
+  transform: translate(-50%, -50%) scale(1.08);
+}
+
+.journey-trans-icon {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  color: var(--color-late);
+}
+
+.journey-trans-text {
+  color: var(--color-text);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.2px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---------- accessibility / motion ---------- */
 
 :focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; border-radius: 8px; }
-/* the palette input is always focused while the dialog is open — a permanent
-   ring is noise there; the caret + row styling already mark focus */
+/* inputs inside styled containers should not have inner browser/focus-visible outlines */
+input:focus, input:focus-visible,
+textarea:focus, textarea:focus-visible,
+select:focus, select:focus-visible,
 .no-focus-ring:focus-visible { outline: none; }
 
 @media (prefers-reduced-motion: reduce) {

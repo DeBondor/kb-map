@@ -156,4 +156,70 @@ export interface TripView {
    *  drawn vehicle's position, heading and current stop fresh while the route
    *  is open (matched by Vehicle.id). null for static (rozkładowy) trips. */
   execId: string | null;
+  /** GTFS trip id for static routes — matches live vehicles sharing this trip */
+  tripId?: string | number | null;
 }
+
+export interface ConnectionLegStop {
+  stopId: string;
+  stopName: string;
+  arrivalTime: string;
+  departureTime: string;
+  lat?: number;
+  lon?: number;
+}
+
+export interface ConnectionLeg {
+  line: string;
+  tripId: string;
+  headsign: string;
+  fromStopId: string;
+  fromStopName: string;
+  toStopId: string;
+  toStopName: string;
+  departureTime: string;
+  arrivalTime: string;
+  departureSecs: number;
+  arrivalSecs: number;
+  durationMins: number;
+  stopsCount: number;
+  stops?: ConnectionLegStop[];
+}
+
+export interface ConnectionItinerary {
+  type: "direct" | "transfer";
+  departureTime: string;
+  arrivalTime: string;
+  departureSecs: number;
+  arrivalSecs: number;
+  totalDurationMins: number;
+  transfersCount: number;
+  transferWaitMins?: number;
+  transferStopName?: string;
+  date?: string;
+  dayLabel?: string;
+  arrivesNextDay?: boolean;
+  legs: ConnectionLeg[];
+}
+
+export interface ConnectionsResponse {
+  count: number;
+  connections: ConnectionItinerary[];
+}
+
+export interface JourneyLegResolved {
+  leg: ConnectionLeg;
+  routed: LatLng[] | null;
+  lineColor: string;
+}
+
+export interface JourneyView {
+  gen: number;
+  itinerary: ConnectionItinerary;
+  fromStop: Stop | null;
+  toStop: Stop | null;
+  legs: JourneyLegResolved[];
+  selectedLegIdx: number | null;
+  status: "routing" | "ready";
+}
+

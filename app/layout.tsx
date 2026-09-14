@@ -5,7 +5,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Komunikacja Beskidzka — mapa pojazdów na żywo",
   description:
-    "Wszystkie autobusy Komunikacji Beskidzkiej na jednej mapie: pozycje na żywo, opóźnienia, rozkłady przystanków i trasy linii. Feed GTFS-RT (VehiclePositions) do pobrania.",
+    "Wszystkie autobusy Komunikacji Beskidzkiej na jednej mapie: pozycje na żywo, opóźnienia, rozkłady przystanków i trasy linii.",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",

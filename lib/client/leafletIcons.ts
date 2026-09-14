@@ -87,3 +87,28 @@ export function makeUserLocationIcon(): L.DivIcon {
     iconAnchor: [11, 11],
   });
 }
+
+/** Prominent pin markers for connection journey (start, transfer points, end). */
+export function makeJourneyPinIcon(type: "start" | "transfer" | "end", text?: string): L.DivIcon {
+  if (type === "transfer") {
+    const badgeText = text ? `<span class="journey-trans-text">${escapeHtml(text)}</span>` : "";
+    const transferSvg =
+      '<svg class="journey-trans-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>' +
+      "</svg>";
+    return L.divIcon({
+      className: "journey-pin-marker",
+      html: `<div class="journey-pin-wrap"><div class="journey-trans-pill">${transferSvg}${badgeText}</div></div>`,
+      iconSize: [40, 24],
+      iconAnchor: [20, 12],
+    });
+  }
+
+  const isStart = type === "start";
+  return L.divIcon({
+    className: "journey-pin-marker",
+    html: `<div class="journey-pin-wrap"><div class="journey-node-pin ${isStart ? "journey-node-start" : "journey-node-end"}"><span class="journey-node-inner"></span></div></div>`,
+    iconSize: [26, 26],
+    iconAnchor: [13, 13],
+  });
+}
