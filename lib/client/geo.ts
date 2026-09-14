@@ -50,6 +50,8 @@ export interface ActiveStopResult {
   index: number;
   /** True if the vehicle is currently stopped at the stop, false if in transit towards it */
   isAtStop: boolean;
+  /** Progress along the segment from previous stop towards the next stop (0.0 to 1.0) */
+  progress?: number;
 }
 
 /**
@@ -64,13 +66,13 @@ export function findActiveStop(
   vtiHint?: number | null,
 ): ActiveStopResult {
   const n = stops.length;
-  if (n === 0) return { index: 0, isAtStop: false };
-  if (n === 1) return { index: 0, isAtStop: true };
+  if (n === 0) return { index: 0, isAtStop: false, progress: 0 };
+  if (n === 1) return { index: 0, isAtStop: true, progress: 1 };
 
   // If no valid vehicle coords, use vtiHint
   if (!vehicle || !Number.isFinite(vehicle.lat) || !Number.isFinite(vehicle.lon)) {
     const hint = vtiHint ?? 0;
-    return { index: Math.max(0, Math.min(n - 1, hint)), isAtStop: false };
+    return { index: Math.max(0, Math.min(n - 1, hint)), isAtStop: false, progress: 0 };
   }
 
   const vLat = vehicle.lat;
@@ -90,7 +92,7 @@ export function findActiveStop(
   // If vehicle is physically at the stop (<= 55m)
   if (minStopDist <= 55) {
     if (vehicle.at_stop !== false) {
-      return { index: closestStopIdx, isAtStop: true };
+      return { index: closestStopIdx, isAtStop: true, progress: 1 };
     }
   }
 
@@ -99,10 +101,24 @@ export function findActiveStop(
   if (vehicle.at_stop === false && vehicle.current_stop_sequence != null) {
     const seq = vehicle.current_stop_sequence;
     if (seq >= 0 && seq < n - 1) {
-      return { index: seq + 1, isAtStop: false };
+      const A = stops[seq];
+      const B = stops[seq + 1];
+      const rad = Math.PI / 180;
+      const cosLat = Math.cos(A.lat * rad);
+      const dx = (B.lon - A.lon) * cosLat;
+      const dy = B.lat - A.lat;
+      const L2 = dx * dx + dy * dy;
+      let progress = 0.5;
+      if (L2 >= 1e-12) {
+        const vx = (vLon - A.lon) * cosLat;
+        const vy = vLat - A.lat;
+        const t = (vx * dx + vy * dy) / L2;
+        progress = Math.max(0.05, Math.min(0.95, t));
+      }
+      return { index: seq + 1, isAtStop: false, progress };
     }
     if (seq >= n - 1) {
-      return { index: n - 1, isAtStop: true };
+      return { index: n - 1, isAtStop: true, progress: 1 };
     }
   }
 
@@ -114,6 +130,7 @@ export function findActiveStop(
 
   let bestSegIdx = 0;
   let minSegDist = Infinity;
+  let bestClampedT = 0.5;
 
   for (let i = startI; i <= endI; i++) {
     const A = stops[i];
@@ -139,10 +156,11 @@ export function findActiveStop(
     if (distToSeg < minSegDist) {
       minSegDist = distToSeg;
       bestSegIdx = i;
+      bestClampedT = clampedT;
     }
   }
 
   // The vehicle is driving on segment bestSegIdx -> bestSegIdx + 1.
   // Stop bestSegIdx has been passed, and the vehicle is approaching bestSegIdx + 1!
-  return { index: bestSegIdx + 1, isAtStop: false };
+  return { index: bestSegIdx + 1, isAtStop: false, progress: bestClampedT };
 }

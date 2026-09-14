@@ -135,15 +135,22 @@ function TripView({
     for (let i = 0; i < times.length; i++) {
       const sched = secsFromHHMM(times[i].departure_time);
       if (sched != null && sched > now) {
-        return { index: i, isAtStop: false };
+        if (i === 0) return { index: 0, isAtStop: true, progress: 0 };
+        const prevSched = secsFromHHMM(times[i - 1].departure_time);
+        const progress =
+          prevSched != null && sched > prevSched
+            ? Math.max(0, Math.min(1, (now - prevSched) / (sched - prevSched)))
+            : 0.5;
+        return { index: i, isAtStop: false, progress };
       }
     }
     // All scheduled times in the past -> course completed
-    return { index: times.length - 1, isAtStop: true };
+    return { index: times.length - 1, isAtStop: true, progress: 1 };
   })();
 
   const activeStopIndex = activeStop.index;
   const isAtStop = activeStop.isAtStop;
+  const activeProgress = Math.max(0, Math.min(1, activeStop.progress ?? (isAtStop ? 1 : 0.5)));
   const vti = activeStopIndex;
   const headerDelay =
     (liveVeh ?? lastLive.veh)?.delay ??
@@ -159,11 +166,23 @@ function TripView({
     return m;
   }, [trip.stops]);
 
-  /* keep the vehicle's current stop in view; re-runs as the live stop advances */
+  /* target stop to keep at the top of the timeline: the stop just left (so upcoming stops fill view)
+     or the current stop if the bus is stopped */
+  const scrollTargetIdx = !isAtStop && vti > 0 ? vti - 1 : (vti ?? 0);
+
+  /* scroll to the vehicle's current stop near the top so upcoming stops fill the view */
   useEffect(() => {
     if (vti == null || trip.status === "loading") return;
-    currentRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [vti, trip.status, trip.gen]);
+    const raf = requestAnimationFrame(() => {
+      const container = scrollRef.current;
+      const targetEl = currentRef.current;
+      if (!container || !targetEl) return;
+      // Position target stop near the top so upcoming stops fill the modal below it
+      const targetTop = Math.max(0, targetEl.offsetTop - 12);
+      container.scrollTo({ top: targetTop, behavior: "smooth" });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [vti, isAtStop, trip.status, trip.gen]);
 
   const direction = trip.direction || vehMeta?.headsign || "";
   /* stops this course loops through (e.g. the SZCZYRK BIŁA spur on some 120s) —
@@ -259,6 +278,9 @@ function TripView({
             {trip.rawTimes.map((t, idx) => {
               const isCurrent = vti != null && idx === vti;
               const passed = vti != null && idx < vti;
+              const isTransit = !isAtStop && vti != null && vti > 0;
+              const isPrevStop = isTransit && idx === vti - 1;
+              const isNextStop = isTransit && idx === vti;
               const diff = t.estimate?.time_diff ?? null;
               const effectiveDiff = diff ?? (isLiveWithLoc && !passed ? headerDelay : null);
               const planned = secsFromHHMM(t.departure_time);
@@ -270,7 +292,7 @@ function TripView({
               const first = idx === 0;
               const last = idx === trip.rawTimes.length - 1;
               return (
-                <li key={`${t.index}-${idx}`} ref={isCurrent ? currentRef : undefined}>
+                <li key={`${t.index}-${idx}`} ref={idx === scrollTargetIdx ? currentRef : undefined}>
                   <button
                     type="button"
                     disabled={!coord}
@@ -290,23 +312,104 @@ function TripView({
 
                     {/* timeline node */}
                     <span className="relative w-5 shrink-0 self-stretch" aria-hidden>
+                      {/* top half line (from top of row to center node) */}
                       {!first && (
                         <span
                           className="absolute left-1/2 top-0 h-1/2 w-[3px] -translate-x-1/2"
-                          style={{ background: passed || isCurrent ? "rgba(255,255,255,0.18)" : lineColor }}
+                          style={{ background: idx <= vti ? "rgba(255,255,255,0.18)" : lineColor }}
                         />
                       )}
+                      {/* descending line overlay on approaching stop (when vehicle enters second half of segment) */}
+                      {isNextStop && activeProgress > 0.5 && (
+                        <span
+                          className="pointer-events-none absolute left-1/2 top-0 w-[3px] -translate-x-1/2 rounded-full transition-all duration-700 ease-out"
+                          style={{
+                            height: `${Math.min(50, (activeProgress - 0.5) * 100)}%`,
+                            background: lineColor,
+                            boxShadow: `0 0 6px ${lineColor}99`,
+                          }}
+                        />
+                      )}
+                      {/* vehicle marker moving down approaching stop */}
+                      {isNextStop && activeProgress > 0.5 && (
+                        <span
+                          className="pointer-events-none absolute left-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center transition-all duration-700 ease-out"
+                          style={{
+                            top: `${(activeProgress - 0.5) * 100}%`,
+                          }}
+                        >
+                          <span
+                            className="absolute h-5 w-5 animate-ping rounded-full opacity-30"
+                            style={{ background: lineColor }}
+                          />
+                          <span
+                            className="relative h-4 w-4 animate-pulse-dot rounded-full border-[2.5px] border-white shadow-md"
+                            style={{
+                              background: lineColor,
+                              boxShadow: `0 0 8px ${lineColor}aa`,
+                            }}
+                          />
+                        </span>
+                      )}
+
+                      {/* bottom half line (from center node to bottom of row) */}
                       {!last && (
                         <span
                           className="absolute bottom-0 left-1/2 h-1/2 w-[3px] -translate-x-1/2"
-                          style={{ background: passed ? "rgba(255,255,255,0.18)" : lineColor }}
+                          style={{ background: idx < vti ? "rgba(255,255,255,0.18)" : lineColor }}
                         />
                       )}
-                      {isCurrent ? (
+                      {/* descending line overlay on previous stop (vehicle descending in first half of segment) */}
+                      {isPrevStop && (
                         <span
-                          className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 animate-pulse-dot rounded-full border-[3px] border-white"
-                          style={{ background: lineColor }}
+                          className="pointer-events-none absolute left-1/2 w-[3px] -translate-x-1/2 rounded-full transition-all duration-700 ease-out"
+                          style={{
+                            top: "50%",
+                            height: `${Math.min(50, activeProgress * 100)}%`,
+                            background: lineColor,
+                            boxShadow: `0 0 6px ${lineColor}99`,
+                          }}
                         />
+                      )}
+                      {/* vehicle marker moving down previous stop */}
+                      {isPrevStop && activeProgress <= 0.5 && (
+                        <span
+                          className="pointer-events-none absolute left-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center transition-all duration-700 ease-out"
+                          style={{
+                            top: `${50 + activeProgress * 100}%`,
+                          }}
+                        >
+                          <span
+                            className="absolute h-5 w-5 animate-ping rounded-full opacity-30"
+                            style={{ background: lineColor }}
+                          />
+                          <span
+                            className="relative h-4 w-4 animate-pulse-dot rounded-full border-[2.5px] border-white shadow-md"
+                            style={{
+                              background: lineColor,
+                              boxShadow: `0 0 8px ${lineColor}aa`,
+                            }}
+                          />
+                        </span>
+                      )}
+
+                      {/* stop center node */}
+                      {isCurrent ? (
+                        isAtStop ? (
+                          <span
+                            className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 animate-pulse-dot rounded-full border-[3px] border-white shadow-md"
+                            style={{ background: lineColor, boxShadow: `0 0 10px ${lineColor}99` }}
+                          />
+                        ) : (
+                          <span
+                            className="absolute left-1/2 top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2"
+                            style={{
+                              borderColor: lineColor,
+                              background: "var(--color-surface)",
+                              boxShadow: `0 0 8px ${lineColor}55`,
+                            }}
+                          />
+                        )
                       ) : (
                         <span
                           className="absolute left-1/2 top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2"

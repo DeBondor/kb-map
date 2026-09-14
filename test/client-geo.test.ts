@@ -57,6 +57,7 @@ describe("findActiveStop", () => {
     const res = findActiveStop(stops, { lat: 49.7001, lon: 18.9961, at_stop: true });
     assert.equal(res.index, 1);
     assert.equal(res.isAtStop, true);
+    assert.equal(res.progress, 1);
   });
 
   it("marks stop 1 as passed and targets stop 2 when vehicle has departed past stop 1", () => {
@@ -64,6 +65,7 @@ describe("findActiveStop", () => {
     const res = findActiveStop(stops, { lat: 49.698, lon: 18.993, at_stop: false });
     assert.equal(res.index, 2);
     assert.equal(res.isAtStop, false);
+    assert.ok(res.progress != null && res.progress > 0 && res.progress < 1);
   });
 
   it("respects upstream at_stop = false to advance past departed stop", () => {
@@ -75,5 +77,6 @@ describe("findActiveStop", () => {
     });
     assert.equal(res.index, 2);
     assert.equal(res.isAtStop, false);
+    assert.ok(res.progress != null && res.progress > 0 && res.progress < 1);
   });
 });
