@@ -19,8 +19,11 @@ const PEEK = 0.25;
 
 export type Snap = "peek" | "half" | "full";
 
-const SNAPS: Snap[] = ["full", "half", "peek"];
-
+const SNAP_HEIGHTS: Record<Snap, string> = {
+  full: `${FULL * 100}dvh`,
+  half: `${HALF * 100}dvh`,
+  peek: `${PEEK * 100}dvh`,
+};
 
 // Apple WWDC 2018 Fluid Interfaces rubber-band formula
 function rubberband(overshoot: number, dimension: number, constant = 0.45): number {
@@ -56,10 +59,9 @@ export default function BottomSheet({
 
   const sheetRef = useRef<HTMLElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
-  const [headerHeight, setHeaderHeight] = useState(160);
+  const [_headerHeight, setHeaderHeight] = useState(160);
   const restoreRef = useRef<HTMLElement | null>(null);
   const snapRef = useRef<Snap>(initialSnap);
-  const currentYRef = useRef<number>(0);
   const isDraggingRef = useRef(false);
 
   // Measure header height dynamically to bound content container precisely within viewport
@@ -102,12 +104,6 @@ export default function BottomSheet({
 
   const vh = () => (typeof window !== "undefined" ? window.innerHeight : 800);
 
-  const SNAP_HEIGHTS: Record<Snap, string> = {
-    full: `${FULL * 100}dvh`,
-    half: `${HALF * 100}dvh`,
-    peek: `${PEEK * 100}dvh`,
-  };
-
   // Entrance transition on mount
   useEffect(() => {
     if (desktop) return;
@@ -124,7 +120,9 @@ export default function BottomSheet({
       if (startRef.current != null || !e.isPrimary) return;
       if ((e.target as HTMLElement).closest?.("button,a,input,[role='button']")) return;
 
+      const curH = sheetRef.current?.offsetHeight ?? (HALF * vh());
       if (sheetRef.current) {
+        sheetRef.current.style.setProperty("--sheet-height", `${curH}px`);
         sheetRef.current.style.transition = "none";
       }
 
@@ -132,7 +130,7 @@ export default function BottomSheet({
         id: e.pointerId,
         y: e.clientY,
         t: e.timeStamp,
-        startH: sheetRef.current?.offsetHeight ?? (HALF * vh()),
+        startH: curH,
         target: e.target as HTMLElement,
       };
       movesRef.current = [{ y: e.clientY, t: e.timeStamp }];
@@ -169,7 +167,7 @@ export default function BottomSheet({
       }
 
       if (sheetRef.current) {
-        sheetRef.current.style.height = `${h}px`;
+        sheetRef.current.style.setProperty("--sheet-height", `${h}px`);
       }
     },
     [],
@@ -196,6 +194,7 @@ export default function BottomSheet({
 
           snapRef.current = nextSnap;
           if (sheetRef.current) {
+            sheetRef.current.style.removeProperty("--sheet-height");
             sheetRef.current.style.transition = "height 0.35s var(--ease-spring)";
             sheetRef.current.style.height = SNAP_HEIGHTS[nextSnap];
           }
@@ -224,6 +223,7 @@ export default function BottomSheet({
       // Optional explicit swipe-to-dismiss (only if enabled & swiping fast past peek)
       if (dismissOnDrag && projectedH < PEEK * v - 80 && releaseVel > 900) {
         if (sheetRef.current) {
+          sheetRef.current.style.removeProperty("--sheet-height");
           sheetRef.current.style.transition = "transform 0.28s ease-in";
           sheetRef.current.style.transform = "translate3d(0, 100%, 0)";
         }
@@ -245,6 +245,7 @@ export default function BottomSheet({
 
       snapRef.current = nearest;
       if (sheetRef.current) {
+        sheetRef.current.style.removeProperty("--sheet-height");
         sheetRef.current.style.transition = "height 0.35s var(--ease-spring)";
         sheetRef.current.style.height = SNAP_HEIGHTS[nearest];
       }
@@ -261,6 +262,7 @@ export default function BottomSheet({
       isDraggingRef.current = false;
       setIsDragging(false);
       if (sheetRef.current) {
+        sheetRef.current.style.removeProperty("--sheet-height");
         sheetRef.current.style.transition = "height 0.35s var(--ease-spring)";
         sheetRef.current.style.height = SNAP_HEIGHTS[snapRef.current];
       }
@@ -300,7 +302,9 @@ export default function BottomSheet({
         isDragging ? "select-none" : ""
       }`}
       style={{
-        height: isDragging ? undefined : SNAP_HEIGHTS[snap],
+        height: isDragging ? "var(--sheet-height)" : SNAP_HEIGHTS[snap],
+        maxHeight: "calc(min(80dvh, 100dvh - env(safe-area-inset-top, 0px) - 3.5rem))",
+        minHeight: SNAP_HEIGHTS["peek"],
         transform: mounted ? "none" : "translate3d(0, 100%, 0)",
         transition: isDragging
           ? "none"

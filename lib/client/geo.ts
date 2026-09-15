@@ -61,7 +61,7 @@ export interface ActiveStopResult {
  * If isAtStop is false, the bus has departed from the previous stop and is moving towards `result.index`.
  */
 export function findActiveStop(
-  stops: Array<{ lat: number; lon: number }>,
+  stops: Array<{ lat: number; lon: number } | null | undefined>,
   vehicle: { lat: number; lon: number; at_stop?: boolean; current_stop_sequence?: number | null } | null,
   vtiHint?: number | null,
 ): ActiveStopResult {
@@ -78,89 +78,135 @@ export function findActiveStop(
   const vLat = vehicle.lat;
   const vLon = vehicle.lon;
 
-  // 1. Check if the vehicle is physically at any stop (within 55m)
+  // 1. Check if the vehicle is physically at any stop
   let closestStopIdx = 0;
   let minStopDist = Infinity;
   for (let i = 0; i < n; i++) {
-    const d = haversineMeters(vLat, vLon, stops[i].lat, stops[i].lon);
+    const s = stops[i];
+    if (!s || !Number.isFinite(s.lat) || !Number.isFinite(s.lon)) continue;
+    const d = haversineMeters(vLat, vLon, s.lat, s.lon);
     if (d < minStopDist) {
       minStopDist = d;
       closestStopIdx = i;
     }
   }
 
-  // If vehicle is physically at the stop (<= 55m)
+  // If vehicle is physically at the stop (<= 55m when explicitly at_stop, or <= 35m dwell)
   if (minStopDist <= 55) {
-    if (vehicle.at_stop !== false) {
+    if (vehicle.at_stop === true || (vehicle.at_stop !== false && minStopDist <= 35)) {
       return { index: closestStopIdx, isAtStop: true, progress: 1 };
     }
   }
 
-  // 2. If upstream explicitly provided at_stop === false and current_stop_sequence:
-  // In upstream dispatch, current_stop_sequence is the stop the vehicle has already left!
-  if (vehicle.at_stop === false && vehicle.current_stop_sequence != null) {
-    const seq = vehicle.current_stop_sequence;
-    if (seq >= 0 && seq < n - 1) {
-      const A = stops[seq];
-      const B = stops[seq + 1];
-      const rad = Math.PI / 180;
-      const cosLat = Math.cos(A.lat * rad);
-      const dx = (B.lon - A.lon) * cosLat;
-      const dy = B.lat - A.lat;
-      const L2 = dx * dx + dy * dy;
-      let progress = 0.5;
-      if (L2 >= 1e-12) {
-        const vx = (vLon - A.lon) * cosLat;
-        const vy = vLat - A.lat;
-        const t = (vx * dx + vy * dy) / L2;
-        progress = Math.max(0.05, Math.min(0.95, t));
-      }
-      return { index: seq + 1, isAtStop: false, progress };
-    }
-    if (seq >= n - 1) {
-      return { index: n - 1, isAtStop: true, progress: 1 };
-    }
+  // 2. Geometric segment projection onto ALL consecutive stop segments.
+  // Evaluate the whole route so skipped stops (where upstream sequence never advanced)
+  // do not hold the vehicle back to an old stop when GPS has physically progressed.
+  const rad = Math.PI / 180;
+  interface Candidate {
+    segIdx: number;
+    dist: number;
+    progress: number;
+    rawT: number;
   }
+  const candidates: Candidate[] = [];
 
-  // 3. Geometric segment projection onto the route:
-  // Find which consecutive segment S_i -> S_{i+1} the vehicle is currently driving on.
-  const anchor = vtiHint != null && vtiHint >= 0 && vtiHint < n ? vtiHint : closestStopIdx;
-  const startI = Math.max(0, anchor - 3);
-  const endI = Math.min(n - 2, anchor + 3);
-
-  let bestSegIdx = 0;
-  let minSegDist = Infinity;
-  let bestClampedT = 0.5;
-
-  for (let i = startI; i <= endI; i++) {
+  for (let i = 0; i < n - 1; i++) {
     const A = stops[i];
     const B = stops[i + 1];
+    if (!A || !B || !Number.isFinite(A.lat) || !Number.isFinite(B.lat)) continue;
 
-    const rad = Math.PI / 180;
-    const cosLat = Math.cos(A.lat * rad);
+    const midLat = ((A.lat + B.lat) / 2) * rad;
+    const cosLat = Math.cos(midLat);
     const dx = (B.lon - A.lon) * cosLat;
     const dy = B.lat - A.lat;
     const L2 = dx * dx + dy * dy;
-
     if (L2 < 1e-12) continue;
 
     const vx = (vLon - A.lon) * cosLat;
     const vy = vLat - A.lat;
     const t = (vx * dx + vy * dy) / L2;
-
     const clampedT = Math.max(0, Math.min(1, t));
     const projLat = A.lat + clampedT * dy;
     const projLon = A.lon + (clampedT * dx) / cosLat;
     const distToSeg = haversineMeters(vLat, vLon, projLat, projLon);
 
-    if (distToSeg < minSegDist) {
-      minSegDist = distToSeg;
-      bestSegIdx = i;
-      bestClampedT = clampedT;
+    candidates.push({ segIdx: i, dist: distToSeg, progress: clampedT, rawT: t });
+  }
+
+  if (candidates.length === 0) {
+    return { index: closestStopIdx, isAtStop: minStopDist <= 55, progress: 0 };
+  }
+
+  // Find minimum distance to any route segment
+  let minSegDist = Infinity;
+  for (const c of candidates) {
+    if (c.dist < minSegDist) minSegDist = c.dist;
+  }
+
+  // Plausible candidates are those close to the minimum segment distance (within 70m tolerance)
+  // Segments kilometers away (from a stale upstream sequence or skipped stops) are excluded.
+  const threshold = Math.max(minSegDist + 70, minSegDist * 1.6);
+  const plausible = candidates.filter((c) => c.dist <= threshold);
+
+  // If upstream explicitly provided at_stop === false and current_stop_sequence:
+  // ONLY accept current_stop_sequence IF it is one of the plausible segments near the bus!
+  if (vehicle.at_stop === false && vehicle.current_stop_sequence != null) {
+    const seq = vehicle.current_stop_sequence;
+    const seqMatch = plausible.find((c) => c.segIdx === seq);
+    if (seqMatch) {
+      return {
+        index: Math.min(n - 1, seqMatch.segIdx + 1),
+        isAtStop: false,
+        progress: Math.max(0.05, Math.min(0.95, seqMatch.progress)),
+      };
     }
   }
 
-  // The vehicle is driving on segment bestSegIdx -> bestSegIdx + 1.
-  // Stop bestSegIdx has been passed, and the vehicle is approaching bestSegIdx + 1!
-  return { index: bestSegIdx + 1, isAtStop: false, progress: bestClampedT };
+  // If there are multiple plausible candidates (e.g. loops or spurs sharing the same roadway),
+  // use vtiHint to disambiguate IF vtiHint is near one of the candidates.
+  let best = plausible[0];
+  if (plausible.length > 1 && vtiHint != null && vtiHint >= 0 && vtiHint < n) {
+    const nearHint = plausible.filter(
+      (c) => Math.abs(c.segIdx + 1 - vtiHint) <= 2 || Math.abs(c.segIdx - vtiHint) <= 2,
+    );
+    if (nearHint.length > 0) {
+      nearHint.sort((a, b) => a.dist - b.dist);
+      best = nearHint[0];
+    } else {
+      // No plausible candidate near hint -> hint is stale, pick geometrically closest
+      plausible.sort((a, b) => {
+        const aBetween = a.rawT >= 0 && a.rawT <= 1 ? 0 : 1;
+        const bBetween = b.rawT >= 0 && b.rawT <= 1 ? 0 : 1;
+        if (aBetween !== bBetween) return aBetween - bBetween;
+        return a.dist - b.dist;
+      });
+      best = plausible[0];
+    }
+  } else if (plausible.length > 1) {
+    plausible.sort((a, b) => {
+      const aBetween = a.rawT >= 0 && a.rawT <= 1 ? 0 : 1;
+      const bBetween = b.rawT >= 0 && b.rawT <= 1 ? 0 : 1;
+      if (aBetween !== bBetween) return aBetween - bBetween;
+      return a.dist - b.dist;
+    });
+    best = plausible[0];
+  }
+
+  // If vehicle is past the last stop on the route
+  if (best.segIdx === n - 2 && best.rawT > 1) {
+    return { index: n - 1, isAtStop: true, progress: 1 };
+  }
+
+  // If vehicle is approaching the last stop and within 55m
+  if (best.segIdx + 1 === n - 1 && best.progress >= 0.98) {
+    return { index: n - 1, isAtStop: minStopDist <= 55, progress: 1 };
+  }
+
+  // The vehicle is driving on segment best.segIdx -> best.segIdx + 1.
+  // Stop best.segIdx has been passed, and the vehicle is approaching best.segIdx + 1!
+  return {
+    index: best.segIdx + 1,
+    isAtStop: false,
+    progress: best.progress,
+  };
 }

@@ -110,6 +110,13 @@ function TripView({
   /* prefer the live poll's current stop over the snapshot */
   const liveVti = liveVeh?.current_stop_sequence ?? lastLive.vti;
 
+  /** schedule index → resolved physical stop (for fly-to on tap and coordinate lookup) */
+  const stopByIndex = useMemo(() => {
+    const m = new Map<number, Stop>();
+    for (const r of trip.stops) m.set(r.t.index, r.s);
+    return m;
+  }, [trip.stops]);
+
   /* Dynamically determine the active stop index (current stop the bus is at/approaching) */
   const activeStop: ActiveStopResult = (() => {
     const times = trip.rawTimes;
@@ -119,7 +126,10 @@ function TripView({
       const v = liveVeh ?? trip.vehicle;
       if (v && Number.isFinite(v.lat) && Number.isFinite(v.lon)) {
         return findActiveStop(
-          trip.stops.map((r) => ({ lat: r.s.lat, lon: r.s.lon })),
+          times.map((t) => {
+            const s = stopByIndex.get(t.index);
+            return s ? { lat: s.lat, lon: s.lon } : null;
+          }),
           {
             lat: v.lat,
             lon: v.lon,
@@ -158,13 +168,6 @@ function TripView({
     trip.rawTimes[vti ?? -1]?.estimate?.time_diff ??
     null;
   const eta = loading || failed ? "" : computeEta(trip, now, vti, isAtStop, headerDelay);
-
-  /** schedule index → resolved physical stop (for fly-to on tap) */
-  const stopByIndex = useMemo(() => {
-    const m = new Map<number, Stop>();
-    for (const r of trip.stops) m.set(r.t.index, r.s);
-    return m;
-  }, [trip.stops]);
 
   /* target stop to keep at the top of the timeline: the stop just left (so upcoming stops fill view)
      or the current stop if the bus is stopped */
